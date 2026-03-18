@@ -21,7 +21,7 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Native
 
         private IVadOnnxModel? _vadOnnxModel;
         private int _sampleRate = 16000;
-        private int _closeConnectionNoVoiceTime = 120;
+        private int _closeConnectionNoVoiceTime = 60;
 
         private float _silenceThresholdSecond;
         private float _threshold;
@@ -61,7 +61,7 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Native
                 this._silenceThresholdSecond = modelSetting.Config.GetConfigValueOrDefault("SilenceThresholdSecond", 0.7f);
                 this._threshold = modelSetting.Config.GetConfigValueOrDefault("Threshold", 0.5f);
                 this._thresholdLow = modelSetting.Config.GetConfigValueOrDefault("ThresholdLow", 0.2f);
-                this._closeConnectionNoVoiceTime = modelSetting.Config.GetConfigValueOrDefault("CloseConnectionNoVoiceTime", 120);
+                this._closeConnectionNoVoiceTime = modelSetting.Config.GetConfigValueOrDefault("CloseConnectionNoVoiceTime", 60);
 
                 this.FrameSize = this._sampleRate == SAMPLING_RATE_16K ? 512 : 256;
 
@@ -190,19 +190,27 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Native
 
         private void CheckLongTermSilence(string deviceId, string sessionId, VadSessionState vadState)
         {
-            if (vadState.HaveVoiceLatestTime == 0)
+            try
             {
-                vadState.HaveVoiceLatestTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
-                return;
-            }
+                if (vadState.HaveVoiceLatestTime == 0)
+                {
+                    vadState.HaveVoiceLatestTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+                    return;
+                }
 
-            long silenceDuration = DateTimeOffset.Now.ToUnixTimeMilliseconds() - vadState.HaveVoiceLatestTime;
-            long longTermSilenceThresholdMs = this._closeConnectionNoVoiceTime * 1000;
+                long silenceDuration = DateTimeOffset.Now.ToUnixTimeMilliseconds() - vadState.HaveVoiceLatestTime;
+                long longTermSilenceThresholdMs = this._closeConnectionNoVoiceTime;
 
-            if (silenceDuration >= longTermSilenceThresholdMs)
+                if (silenceDuration >= longTermSilenceThresholdMs)
+                {
+                    this.Logger.LogDebug(Lang.SileroNative_CheckLongTermSilence_Detected, deviceId, silenceDuration);
+                    this._vadEventCallback?.OnLongTermSilence();
+
+                    vadState.HaveVoiceLatestTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+                }
+            }   catch (Exception ex)
             {
-                this.Logger.LogDebug(Lang.SileroNative_CheckLongTermSilence_Detected, deviceId, silenceDuration);
-                this._vadEventCallback?.OnLongTermSilence();
+                this.Logger.LogError(ex, Lang.SileroNative_AnalysisVoiceAsync_UnexpectedError, deviceId);
             }
         }
 

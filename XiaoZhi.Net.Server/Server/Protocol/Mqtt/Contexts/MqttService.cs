@@ -241,8 +241,8 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts
                     byte[] payloadBytes = args.ApplicationMessage.Payload.ToArray();
                     // 2. 用UTF8编码转字符串（JSON默认UTF8）
                     payloadStr = System.Text.Encoding.UTF8.GetString(payloadBytes);
-                    _logger.Debug("收到MQTT消息，ClientId：{ClientId}，Topic：{Topic}，Payload长度：{Length},内容：{neir}",
-                        args.ClientId, topic, payload.Length, payloadStr);
+                    //_logger.Debug("收到MQTT消息，ClientId：{ClientId}，Topic：{Topic}，Payload长度：{Length},内容：{neir}",
+                    //    args.ClientId, topic, payload.Length, payloadStr);
 
                     // 调用会话的消息接收事件
                     await MqttMessageDispatch(args.ClientId, topic, payload.ToArray());

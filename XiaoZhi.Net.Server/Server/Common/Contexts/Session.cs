@@ -139,6 +139,10 @@ namespace XiaoZhi.Net.Server.Common.Contexts
         /// <returns>如果正在重置则返回true，否则返回false</returns>
         public bool ShouldIgnore() => this._isReseting;
         /// <summary>
+        /// 是否超时关闭
+        /// </summary>
+        public bool timeoutClose { get; set; } = false;
+        /// <summary>
         /// 设置监听模式
         /// </summary>
         /// <param name="mode">监听模式，支持 "auto"、"manual"、"realtime"</param>

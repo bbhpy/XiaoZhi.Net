@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 using System;
+using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Common.Constants;
@@ -30,6 +31,7 @@ namespace XiaoZhi.Net.Server.Handlers
         private IVad? _vad;
         private IAudioDecoder? _audioDecoder;
 
+        
         public AudioReceiveHandler(ObjectPool<Workflow<float[]>> workflowPool,
             ObjectPool<Workflow<string>> stringWorkflowPool,
             XiaoZhiConfig config,
@@ -70,10 +72,11 @@ namespace XiaoZhi.Net.Server.Handlers
 
             this._audioDecoder = privateProvider.AudioDecoder;
             this._audioDecoder.RegisterDevice(session.DeviceId, session.SessionId);
+
             this.RegisterCancellationToken();
             return true;
         }
-
+      
         public async Task Handle(byte[] opusData)
         {
             Session session = this.SendOutter.GetSession();
@@ -122,17 +125,21 @@ namespace XiaoZhi.Net.Server.Handlers
                 this.Logger.LogError(ex, Lang.AudioReceiveHandler_Handle_ProcessFailed, session.DeviceId);
             }
         }
+
         /// <summary>
         /// 语音检测事件
         /// </summary>
         /// <param name="audioData"></param>
         public void OnVoiceDetected(float[] audioData)
         {
+
             Session session = this.SendOutter.GetSession();
             if (session is null || session.ShouldIgnore())
             {
                 return;
             }
+            session.timeoutClose = false;
+
             session.RejectIncomingAudio();
             session.AudioPacket.ResetAudioBuffer();
             session.AudioPacket.VoiceStop = true;
@@ -148,7 +155,9 @@ namespace XiaoZhi.Net.Server.Handlers
             {
                 return;
             }
+
             session.AudioPacket.TrimOldAudio();
+
         }
         /// <summary>
         /// 长时间无语音事件
@@ -163,13 +172,15 @@ namespace XiaoZhi.Net.Server.Handlers
 
             session.AudioPacket.Reset();
 
-            if (session.CloseAfterChat)
+            if (session.timeoutClose)
             {
                 return;
             }
+            session.timeoutClose = true;  // ← 只在这里设置
 
-            session.CloseAfterChat = true;
-            string prompt = "限制20个字内 聊天结束、你要休息了，用富有感情、依依不舍的话来结束这场对话吧。";
+            string prompt = "回复限制10个字内，再见。";
+
+            this.Logger.LogInformation($"设备 {session.SessionId} 10秒无语音输入，准备让LLM说再见");
 
             var workflow = this._stringWorkflowPool.Get();
             try
@@ -238,6 +249,7 @@ namespace XiaoZhi.Net.Server.Handlers
         /// </summary>
         public override void Dispose()
         {
+
             Session session = this.SendOutter.GetSession();
             if (session is null)
             {

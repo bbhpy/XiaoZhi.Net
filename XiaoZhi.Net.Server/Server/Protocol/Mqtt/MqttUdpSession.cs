@@ -227,7 +227,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             {
                 this.XiaoZhiSession.Reset();
             }
-            return this.SendAsync(json, GetTopic("tts"));
+            return this.SendAsync(json, "tts");
         }
 
         public Task SendSttMessageAsync(string sttText)
@@ -243,7 +243,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                 Text = sttText,
                 SessionId = this.SessionId
             };
-            return this.SendAsync(JsonHelper.Serialize(msg),GetTopic("stt"));
+            return this.SendAsync(JsonHelper.Serialize(msg),"stt");
         }
 
         public Task SendLlmMessageAsync(Emotion emotion)
@@ -260,7 +260,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                 Emotion = emotion.GetName().ToLower(),
                 SessionId = this.SessionId
             };
-            return this.SendAsync(JsonHelper.Serialize(emo),GetTopic("llm"));
+            return this.SendAsync(JsonHelper.Serialize(emo),"llm");
         }
 
         public Task SendAbortMessageAsync()
@@ -276,12 +276,14 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                 state = "stop",
                 session_id = this.SessionId
             };
-            return this.SendAsync(JsonHelper.Serialize(abortMessage),GetTopic("abort"));
+            return this.SendAsync(JsonHelper.Serialize(abortMessage),"abort");
         }
 
         public Task CloseSessionAsync(string reason = "")
         {
-            return this.DisconnectAsync(reason);
+            //return this.DisconnectAsync(reason);
+            UdpRemoteEndPoint = null;
+            return Task.CompletedTask;
         }
 
         public async Task SendAsync(string json,string topic)
@@ -292,7 +294,8 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             }
             else
             {
-                await OnMessageReceivedAsync(json, topic);
+                string to1 = GetTopic(topic);
+                await OnMessageReceivedAsync(json, to1);
             }
             //_logger.LogInformation("MQTT Hello回复发送成功，MAC：{ClientId}，回复内容：{Topic}", MacAddress, json);
 

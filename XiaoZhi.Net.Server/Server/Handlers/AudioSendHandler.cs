@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 using System;
+using System.Collections.Generic;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Abstractions.Common.Enums;
@@ -137,16 +138,27 @@ internal class AudioSendHandler : BaseHandler, IInHandler<MixedAudioPacket>
                 await this.SendOutter.SendAsync(opusData);
             }
 
-            // 处理末帧音频数据
-            if (audioPacket.IsLastFrame)
-            {
-                await this.SendOutter.SendTtsMessageAsync(TtsStatus.Stop);
-                this.Logger.LogDebug(Lang.AudioSendHandler_Handle_LastFrame, session.DeviceId);
-                if (session.CloseAfterChat)
+                // 处理末帧音频数据
+                if (audioPacket.IsLastFrame)
                 {
-                    await this.SendOutter.CloseSessionAsync("Close Chat");
+                    await this.SendOutter.SendTtsMessageAsync(TtsStatus.Stop);
+                    this.Logger.LogDebug(Lang.AudioSendHandler_Handle_LastFrame, session.DeviceId);
+                    if (session.timeoutClose)
+                    {
+                        var abortMessage = new
+                        {
+                            type = "goodbye",
+                            session_id = session.SessionId
+                        };
+
+                        string goodbyeJson = System.Text.Json.JsonSerializer.Serialize(abortMessage);
+                        await this.SendOutter.SendAsync(goodbyeJson, "goodbye");
+
+                        this.Logger.LogInformation($"设备 {session.DeviceId} 发送 goodbye 消息，关闭会话");
+
+                        await this.SendOutter.CloseSessionAsync("Close Chat");
+                    }
                 }
-            }
         }
         catch (OperationCanceledException)
         {
