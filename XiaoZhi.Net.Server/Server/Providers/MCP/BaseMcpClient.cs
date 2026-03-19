@@ -24,6 +24,8 @@ namespace XiaoZhi.Net.Server.Providers.MCP
     /// <typeparam name="TLogger">日志记录器类型</typeparam>
     internal abstract class BaseMcpClient<TLogger> : BaseProvider<TLogger, MCPClientBuildConfig>, ISubMcpClient
     {
+        private const char DOT_PLACEHOLDER = '4';  // U+00B7 间隔号
+        private const char REAL_DOT = '.';
         /// <summary>
         /// 用于控制并发访问的信号量，限制同时只能有一个线程访问共享资源
         /// </summary>
@@ -203,18 +205,18 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                                     kernelParameters.Add(kernelParameter);
                                 }
                             }
-
+                            string jgtoolName = this.SanitizeToolName(toolName);
                             KernelFunctionFromMethodOptions functionOption = new KernelFunctionFromMethodOptions
                             {
-                                FunctionName = this.SanitizeToolName(toolName),
+                                FunctionName = jgtoolName,
                                 Description = toolDescription,
                                 Parameters = kernelParameters,
                                 AdditionalMetadata = new ReadOnlyDictionary<string, object?>(this.AdditionalMetadataDic)
                             };
                             KernelFunction toolFunction = KernelFunctionFactory.CreateFromMethod(this._tempMethod, functionOption);
 
-                            this.AddTool(toolName, toolFunction);
-                            this.Logger.LogInformation(Lang.BaseMcpClient_HandleMcpMessageAsync_ToolAdded, toolName);
+                            this.AddTool(jgtoolName, toolFunction);
+                            this.Logger.LogInformation(Lang.BaseMcpClient_HandleMcpMessageAsync_ToolAdded, jgtoolName);
                         }
 
                         this.Logger.LogInformation(Lang.BaseMcpClient_HandleMcpMessageAsync_ToolCount, toolsJson.Count);
@@ -395,21 +397,44 @@ namespace XiaoZhi.Net.Server.Providers.MCP
 
             if (this._mcpTools.TryGetValue(toolName, out KernelFunction? mcpTool))
             {
-                string realToolName = mcpTool.Name;
+                string savedToolName = mcpTool.Name;
+                string clientToolName = savedToolName.Replace(DOT_PLACEHOLDER, REAL_DOT);
 
-                var @params = new
+                this.Logger.LogDebug("工具名转换: {Saved} -> {Client}", savedToolName, clientToolName);
+
+                // 🔥 处理参数格式：将字符串数字转换为真正的数字，并创建JsonObject
+                var argsObject = new JsonObject();
+                foreach (var arg in arguments)
                 {
-                    Name = realToolName,
-                    Arguments = arguments
+                    if (arg.Value is string strValue && int.TryParse(strValue, out int intValue))
+                    {
+                        // 如果是数字字符串，作为数字添加
+                        argsObject[arg.Key] = JsonValue.Create(intValue);
+                        this.Logger.LogDebug("参数转换: {Key} = '{Str}' -> {Int} (数字)", arg.Key, strValue, intValue);
+                    }
+                    else if (arg.Value != null)
+                    {
+                        // 其他类型直接添加
+                        argsObject[arg.Key] = JsonValue.Create(arg.Value);
+                    }
+                }
+
+                var @params = new JsonObject
+                {
+                    ["name"] = clientToolName,
+                    ["arguments"] = argsObject
                 };
 
                 JsonRpcRequest request = new JsonRpcRequest
                 {
                     Id = new RequestId(toolCallId),
                     Method = RequestMethods.ToolsCall,
-                    Params = @params.ToNode()
+                    Params = @params
                 };
-                this.Logger.LogDebug(Lang.BaseMcpClient_CallMcpToolAsync_CallTool, this.CurrentSession.DeviceId, realToolName, argJson);
+
+                this.Logger.LogDebug("设备 {DeviceId} 调用 MCP 工具：{ToolName}，参数：{Arguments}",
+                    this.CurrentSession.DeviceId, clientToolName, argsObject.ToJsonString());
+
                 await this.SendMCPMessageAsync(request);
             }
 
@@ -560,7 +585,8 @@ namespace XiaoZhi.Net.Server.Providers.MCP
         /// <returns>清理后的名称</returns>
         private string SanitizeToolName(string name)
         {
-            return Regex.Replace(name, @"[^a-zA-Z0-9_\\-\u4e00-\u9fff]", "_");
+            string processed = name.Replace(REAL_DOT, DOT_PLACEHOLDER);
+            return Regex.Replace(processed, @"[^a-zA-Z0-9_\\-\u4e00-\u9fff]", "_");
         }
 
 

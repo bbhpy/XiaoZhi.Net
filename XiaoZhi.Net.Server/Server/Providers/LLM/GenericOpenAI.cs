@@ -124,10 +124,28 @@ namespace XiaoZhi.Net.Server.Providers.LLM
             List<OutSegment> allResponse = new List<OutSegment>();
             try
             {
+                // 记录当前内核中的插件信息
+                if (this._kernel != null)
+                {
+                    var plugins = this._kernel.Plugins?.ToList() ?? new List<KernelPlugin>();
+                    foreach (var plugin in plugins)
+                    {
+                        var functions = plugin.ToList();
+                        this.Logger.LogDebug("内核中已加载插件: {PluginName} (包含 {FunctionCount} 个函数)",
+                            plugin.Name, functions.Count);
+                    }
+                }
+
                 this.OnBeforeTokenGenerate?.Invoke();
 
                 string assistantResponse = await this._chatAgent.GenerateChatResponseAsync(userMessage, token);
                 token.ThrowIfCancellationRequested();
+
+                // ✅ 检查响应是否可能包含函数调用结果
+                if (assistantResponse.Contains("播放") || assistantResponse.Contains("音乐"))
+                {
+                    this.Logger.LogDebug("检测到可能与音乐播放相关的响应");
+                }
 
                 string cleanContent = DialogueHelper.GetStringNoPunctuationOrEmoji(assistantResponse);
                 IEnumerable<string> segments = DialogueHelper.SplitContentByPunctuations(cleanContent);
