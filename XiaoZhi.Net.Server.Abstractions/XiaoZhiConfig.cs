@@ -61,6 +61,8 @@ namespace XiaoZhi.Net.Server
         /// udp服务端配置项
         /// </summary>
         public UdpAudioConfig UdpConfig { get; set; } = new UdpAudioConfig();
+
+        public McpServerEndpointconfig McpServerEndpointConfig { get; set; } = new McpServerEndpointconfig();
     }
 
     #region Log
@@ -285,7 +287,11 @@ namespace XiaoZhi.Net.Server
 
     }
 
-
+    public class McpServerEndpointconfig
+    {
+        public int Port { get; set; } = 4531;
+        public string Path { get; set; } = "/mcp";
+    }
 
     /// <summary>
     /// UDP音频配置

@@ -16,6 +16,7 @@ using XiaoZhi.Net.Server.Abstractions.Store;
 using XiaoZhi.Net.Server.Management;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts;
 using XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts;
+using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
 {
@@ -118,6 +119,19 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                     return new UdpClient(new IPEndPoint(IPAddress.Any, udpPort));
                 });
 
+            });
+        }
+
+        public static IHostBuilder AddMCPProtocol(this IHostBuilder builder, XiaoZhiConfig config)
+        {
+            return builder.ConfigureServices((context, services) =>
+            {
+                services.AddHostedService(sp => new McpServerHostedService(
+                sp.GetRequiredService<McpServerEndpoint>(),
+                sp.GetRequiredService<ILogger<McpServerHostedService>>(),
+                config.McpServerEndpointConfig.Port,
+                config.McpServerEndpointConfig.Path
+            ));
             });
         }
     }

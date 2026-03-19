@@ -512,6 +512,8 @@ namespace XiaoZhi.Net.Server.Providers.MCP
             if (this._callResults.TryGetValue(id, out TaskCompletionSource<JsonObject>? tcs) && !tcs.Task.IsCompleted)
             {
                 tcs.SetResult(result);
+
+                this.CleanCallResults(id);
             }
         }
 

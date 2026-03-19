@@ -178,7 +178,7 @@ namespace XiaoZhi.Net.Server.Handlers
             }
             session.timeoutClose = true;  // ← 只在这里设置
 
-            string prompt = "回复限制10个字内，再见。";
+            string prompt = "回复限制20个字内，表达依依不舍的再见吧。";
 
             this.Logger.LogInformation($"设备 {session.SessionId} 10秒无语音输入，准备让LLM说再见");
 

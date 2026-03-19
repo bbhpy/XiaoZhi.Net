@@ -31,7 +31,7 @@ internal class McpEndpointClient : BaseMcpClient<McpEndpointClient>, ISubMcpClie
     /// <summary>
     /// 获取模型名称
     /// </summary>
-    public override string ModelName => SubMCPClientTypeNames.DeviceMcpClient;
+    public override string ModelName => SubMCPClientTypeNames.McpEndpointClient;
     
     /// <summary>
     /// 获取提供程序类型

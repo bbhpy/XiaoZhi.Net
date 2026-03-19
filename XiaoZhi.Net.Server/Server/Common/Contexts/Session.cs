@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -142,6 +143,10 @@ namespace XiaoZhi.Net.Server.Common.Contexts
         /// 是否超时关闭
         /// </summary>
         public bool timeoutClose { get; set; } = false;
+        /// <summary>
+        /// 标识设备  三方mcp服务连接时使用
+        /// </summary>
+        public string DeviceToken { get; set; }
         /// <summary>
         /// 设置监听模式
         /// </summary>

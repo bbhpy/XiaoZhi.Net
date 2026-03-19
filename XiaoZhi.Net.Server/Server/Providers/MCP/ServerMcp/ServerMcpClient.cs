@@ -29,7 +29,7 @@ internal class ServerMcpClient : BaseMcpClient<ServerMcpClient>, ISubMcpClient
     /// <summary>
     /// 获取模型名称
     /// </summary>
-    public override string ModelName => SubMCPClientTypeNames.DeviceMcpClient;
+    public override string ModelName => SubMCPClientTypeNames.ServerMcpClient;
     
     /// <summary>
     /// 获取提供者类型

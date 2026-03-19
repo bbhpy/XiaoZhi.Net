@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Abstractions.Common.Dtos;
+using XiaoZhi.Net.Server.Common.Configs;
 using XiaoZhi.Net.Server.Common.Constants;
 using XiaoZhi.Net.Server.Common.Contexts;
 using XiaoZhi.Net.Server.Common.Exceptions;
@@ -37,7 +38,8 @@ using XiaoZhi.Net.Server.Providers.TTS.Huoshan;
 using XiaoZhi.Net.Server.Providers.TTS.Sherpa;
 using XiaoZhi.Net.Server.Providers.VAD.Native;
 using XiaoZhi.Net.Server.Providers.VAD.Sherpa;
-using XiaoZhi.Net.Server.Common.Configs;
+using XiaoZhi.Net.Server.Server.Providers.MCP;
+using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 using XiaoZhi.Net.Server.Services;
 
 namespace XiaoZhi.Net.Server.Management
@@ -786,6 +788,10 @@ namespace XiaoZhi.Net.Server.Management
             services.AddKeyedTransient<ISubMcpClient, McpEndpointClient>(SubMCPClientTypeNames.McpEndpointClient);
             services.AddKeyedTransient<ISubMcpClient, ServerMcpClient>(SubMCPClientTypeNames.ServerMcpClient);
             services.AddTransient<IMcpClient, McpClient>();
+            services.AddSingleton<McpServiceStore>();
+            services.AddSingleton<TokenSessionRegistry>();
+            services.AddSingleton<McpServerEndpoint>();
+            services.AddSingleton<ToolRegistry>();
         }
 
         /// <summary>

@@ -11,6 +11,8 @@ using XiaoZhi.Net.Server.Common.Exceptions;
 using XiaoZhi.Net.Server.Helpers;
 using XiaoZhi.Net.Server.I18n;
 using XiaoZhi.Net.Server.Management;
+using XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts;
+using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Protocol.WebSocket.Contexts
 {
@@ -22,16 +24,18 @@ namespace XiaoZhi.Net.Server.Protocol.WebSocket.Contexts
     {
         private readonly HandlerManager _handlerManager;
         private readonly ProviderManager _providerManager;
+        private readonly TokenSessionRegistry _tokenSessionRegistry;
 
         /// <summary>
         /// 初始化SocketSession实例
         /// </summary>
         /// <param name="handlerManager">处理器管理器</param>
         /// <param name="providerManager">提供者管理器</param>
-        public SocketSession(HandlerManager handlerManager, ProviderManager providerManager)
+        public SocketSession(HandlerManager handlerManager, ProviderManager providerManager, TokenSessionRegistry tokenSessionRegistry)
         {
             this._handlerManager = handlerManager;
             this._providerManager = providerManager;
+            _tokenSessionRegistry = tokenSessionRegistry;
         }
 
         /// <summary>
@@ -213,6 +217,8 @@ namespace XiaoZhi.Net.Server.Protocol.WebSocket.Contexts
 
             // 创建新的会话对象
             Session session = new Session(this.SessionId, deviceId, token, userEndPoint, Session.ProtocolType.websocket, this);
+            session.DeviceToken = "AAAPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xp";
+            _tokenSessionRegistry.Register(session.DeviceToken, SessionId);
 
             // 初始化问候消息处理器
             this._handlerManager.InitializeHelloMessageHandler(session);

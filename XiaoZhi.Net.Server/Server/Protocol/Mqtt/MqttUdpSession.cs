@@ -29,6 +29,7 @@ using XiaoZhi.Net.Server.Management;
 using XiaoZhi.Net.Server.Protocol;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts;
 using XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts;
+using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
 {
@@ -41,11 +42,11 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         /// <summary>
         /// 设备MAC地址 mqtt连接建立时 在MqttClientId解析出 WebSocket请求参数 Device-Id
         /// </summary>
-        public string MacAddress { get; set; }
+        public string MacAddress { get; set; } = string.Empty;
         /// <summary>
         /// 设备ID mqtt连接建立时 在MqttClientId解析出 WebSocket请求参数 Client-Id
         /// </summary>
-        public string DeviceId { get; set; } 
+        public string DeviceId { get; set; } = string.Empty;
         /// <summary>
         /// 创建时间
         /// </summary>
@@ -56,7 +57,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         public DateTime LastActiveTime { get; set; } = DateTime.Now;
 
         // MQTT相关
-        public string MqttClientId { get; set; } // MQTT客户端ID
+        public string MqttClientId { get; set; } = string.Empty; // MQTT客户端ID
         public bool IsMqttConnected { get; set; } // MQTT连接状态
 
         public Session XiaoZhiSession { get; set; }
@@ -96,7 +97,15 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         public XiaoZhiConfig _xiaoZhiConfig { get; set; }
         private readonly UdpBackgroundService _udpClient; // 复用全局UdpClient
 
-        public MqttUdpSession(ILogger<MqttSession> logger, MqttService mqttService, MqttUdpSessionStore sessionStore,HandlerManager handlerManager, ProviderManager providerManager,XiaoZhiConfig xiaoZhiConfig, UdpBackgroundService udpBackgroundService)
+        private readonly TokenSessionRegistry _tokenSessionRegistry;
+        public MqttUdpSession(ILogger<MqttSession> logger, 
+            MqttService mqttService, 
+            MqttUdpSessionStore sessionStore,
+            HandlerManager handlerManager, 
+            ProviderManager providerManager,
+            XiaoZhiConfig xiaoZhiConfig, 
+            UdpBackgroundService udpBackgroundService,
+            TokenSessionRegistry tokenSessionRegistry)
         {
             SessionId = RandomStringGenerator.GenerateRandomString(9);
             IsMqttConnected = true;
@@ -111,6 +120,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             _xiaoZhiConfig = xiaoZhiConfig;
             _udpClient = udpBackgroundService;
             _udpAudioSender= new UdpAudioSender(Ssrc, UdpAesKey);
+            _tokenSessionRegistry = tokenSessionRegistry;
         }
         public Task SetMqttClientId(string clientId)
         {
@@ -371,6 +381,9 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             IPEndPoint userEndPoint = (remoteEndPoint as IPEndPoint)!;
             // 创建新的会话对象
             Session session = new Session(this.SessionId, MacAddress, string.Empty, userEndPoint,Session.ProtocolType.mqtt, this);
+            session.DeviceToken = "AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa";
+            _tokenSessionRegistry.Register(session.DeviceToken, SessionId);
+
             // 初始化问候消息处理器
             this._handlerManager.InitializeHelloMessageHandler(session);
             // 刷新最后活动时间

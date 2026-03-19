@@ -69,6 +69,8 @@ namespace XiaoZhi.Net.Server
             // 新增：注册MQTT协议
             builder = builder.AddMqttUdpProtocol(config);
 
+            builder = builder.AddMCPProtocol(config);
+
             return builder;
         }
         /// <summary>
