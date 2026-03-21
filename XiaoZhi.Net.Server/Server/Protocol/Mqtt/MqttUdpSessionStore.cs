@@ -67,7 +67,15 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
 
             return true;
         }
-
+        /// <summary>
+        /// 获取MqttUdpSession
+        /// </summary>
+        /// <param name="sessionId"></param>
+        /// <returns></returns>
+        public MqttUdpSession? GetSession(string sessionId)
+        {
+            return base.Get<MqttUdpSession>(sessionId);
+        }
         // ========== 扩展：按不同维度查询会话 ==========
         /// <summary>
         /// mac获取MqttUdpSession

@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Common.Contexts;
+using XiaoZhi.Net.Server.Server.Common.Constants;
 
 namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 {
@@ -143,26 +144,6 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 
             await SendJsonAsync(request);
             _logger.LogInformation("📋 已向设备Token: {Token} 请求工具列表", _deviceToken);
-        }
-
-        /// <summary>
-        /// 等待 initialized 通知
-        /// </summary>
-        private async Task WaitForInitializedAsync()
-        {
-            var buffer = new byte[4096];
-            while (!_cts.Token.IsCancellationRequested)
-            {
-                var result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token);
-                var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                var obj = JsonNode.Parse(json)?.AsObject();
-
-                if (obj != null && obj["method"]?.GetValue<string>() == "notifications/initialized")
-                {
-                    _logger.LogInformation("收到 initialized 通知");
-                    return;
-                }
-            }
         }
 
         /// <summary>
@@ -397,14 +378,21 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     {
                         if (tool is JsonObject toolObj)
                         {
-                            // 使用ToolDefinition.FromJson解析完整工具定义
                             var toolDef = ToolDefinition.FromJson(toolObj);
+
+                            if (!StaticDeputy.IsValidToolName(toolDef.Name))
+                            {
+                                this._logger.LogWarning("工具名称 {ToolName} 包含非法字符，已跳过", toolDef.Name);
+                                continue;
+                            }
+
                             tools.Add(toolDef);
 
                             _logger.LogDebug("   - 工具：{ToolName}，描述：{Description}",
                                 toolDef.Name, toolDef.Description ?? "无描述");
 
-                            // 注册工具到全局索引（只注册名称用于快速路由）
+                            // ⭐ 注册工具到全局索引（只注册名称用于快速路由）
+                            // 注意：这里会触发 ThirdPartyToolRegistrar 注册到 Kernel
                             _toolRegistry.RegisterTool(toolDef.Name, _deviceToken, _serviceId ?? "unknown");
                         }
                     }
@@ -442,6 +430,8 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     }
 
                     _toolsReceived = true;
+
+                    _logger.LogInformation("三方工具已注册，等待设备 Kernel 更新...");
                 }
                 else
                 {

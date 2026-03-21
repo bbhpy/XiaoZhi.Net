@@ -46,6 +46,6 @@ internal interface ILlm : IProvider<LLMBuildConfig>
     /// <param name="userMessage">用户消息</param>
     /// <param name="token">取消令牌</param>
     /// <returns>异步任务</returns>
-    Task StartDialogueAsync(string userMessage, CancellationToken token);
+    Task StartDialogueAsync(string userMessage,Session session, CancellationToken token);
 }
 }

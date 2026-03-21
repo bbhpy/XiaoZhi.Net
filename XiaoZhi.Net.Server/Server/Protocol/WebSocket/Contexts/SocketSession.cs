@@ -241,6 +241,7 @@ namespace XiaoZhi.Net.Server.Protocol.WebSocket.Contexts
         {
             if (this.XiaoZhiSession is not null)
             {
+                _tokenSessionRegistry.Unregister(XiaoZhiSession.DeviceToken);
                 // 保存会话内存数据
                 await this._providerManager.SaveMemoryAsync(this.XiaoZhiSession);
 

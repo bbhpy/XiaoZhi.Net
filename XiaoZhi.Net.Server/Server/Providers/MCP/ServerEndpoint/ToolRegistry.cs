@@ -1,4 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -6,7 +8,10 @@ using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
+using XiaoZhi.Net.Server.Server.Common.Constants;
 
 namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 {
@@ -14,7 +19,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
     /// 工具注册表，管理工具与设备/服务的映射关系（仅用于路由）
     /// 完整工具定义存储在 McpServiceStore 中
     /// </summary>
-    public class ToolRegistry
+    internal class ToolRegistry
     {
         private readonly ILogger<ToolRegistry> _logger;
 
@@ -27,16 +32,32 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         // 等待响应的调用结果
         private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonObject>> _pendingCalls = new();
 
-        public ToolRegistry(ILogger<ToolRegistry> logger)
+        private readonly McpServiceStore _serviceStore;
+        /// <summary>
+        /// 当设备的工具列表更新时触发的事件
+        /// </summary>
+        public event Func<string, string, Task>? OnToolsUpdated;
+
+        private readonly Lazy<ThirdPartyToolRegistrar> _toolRegistrarLazy;
+        public ToolRegistry(
+            ILogger<ToolRegistry> logger,
+            McpServiceStore serviceStore)  // 改为 Lazy 注入
         {
             _logger = logger;
+            _serviceStore = serviceStore;
         }
 
         /// <summary>
-        /// 注册工具（仅注册名称用于路由，完整定义存在ServiceBinding中）
+        /// 注册工具（注册名称用于路由，完整定义存在ServiceBinding中）
         /// </summary>
         public void RegisterTool(string toolName, string deviceToken, string serviceId)
         {
+            if (!StaticDeputy.IsValidToolName(toolName))
+            {
+                this._logger.LogWarning("工具名称 {ToolName} 包含非法字符，已跳过", toolName);
+                return;
+            }
+
             var list = _toolMap.GetOrAdd(toolName, _ => new List<(string, string)>());
 
             lock (list)
@@ -46,6 +67,8 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     list.Add((deviceToken, serviceId));
                     _logger.LogDebug("工具路由注册: {ToolName} -> 设备 {DeviceToken}, 服务 {ServiceId}",
                         toolName, deviceToken, serviceId);
+
+                   
                 }
             }
         }
@@ -195,8 +218,105 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 
             _deviceConnections.TryRemove(deviceToken, out _);
             _logger.LogDebug("移除设备所有路由注册: {DeviceToken}", deviceToken);
+
+            
+        }
+        /// <summary>
+        /// 获取设备绑定的所有三方工具（完整定义）
+        /// </summary>
+        public List<ToolDefinition> GetDeviceTools(string deviceToken)
+        {
+            var result = new List<ToolDefinition>();
+
+            var bindings = _serviceStore.GetServicesByDevice(deviceToken);
+            foreach (var binding in bindings)
+            {
+                if (binding.Tools != null && binding.Tools.Any())
+                {
+                    result.AddRange(binding.Tools);
+                }
+            }
+
+            return result;
         }
 
+        /// <summary>
+        /// 调用三方工具
+        /// </summary>
+        public async Task<JsonObject> CallThirdPartyToolAsync(string toolName, KernelArguments arguments)
+        {
+            // 根据工具名找到对应的设备和连接
+            var targets = FindToolTargets(toolName);
+            if (!targets.Any())
+                throw new Exception($"三方工具 {toolName} 不可用");
+
+            var (deviceToken, serviceId, socket) = targets.First();
+
+            // 检查socket状态
+            if (socket == null || socket.State != WebSocketState.Open)
+                throw new Exception($"三方工具 {toolName} 的 WebSocket 连接已关闭");
+
+            // 创建调用ID
+            int callId = GenerateCallId();
+
+            // 注册等待的调用 - RegisterPendingCall 返回 Task<JsonObject>
+            var task = RegisterPendingCall(callId); 
+
+            // 转换参数
+            var argsObject = new JsonObject();
+            foreach (var arg in arguments)
+            {
+                if (arg.Value is string strValue && int.TryParse(strValue, out int intValue))
+                    argsObject[arg.Key] = JsonValue.Create(intValue);
+                else if (arg.Value != null)
+                    argsObject[arg.Key] = JsonValue.Create(arg.Value);
+            }
+
+            // 发送调用请求
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = callId,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = toolName,
+                    ["arguments"] = argsObject
+                }
+            };
+
+            await SendWebSocketMessageAsync(socket, request);
+
+            // 等待响应（带超时）
+            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(30));
+            var completedTask = await Task.WhenAny(task, timeoutTask); 
+
+            if (completedTask == timeoutTask)
+                throw new TimeoutException($"调用三方工具 {toolName} 超时");
+
+            return await task; 
+        }
+
+        /// <summary>
+        /// 发送 WebSocket 消息
+        /// </summary>
+        private async Task SendWebSocketMessageAsync(WebSocket socket, JsonObject message)
+        {
+            var json = message.ToJsonString();
+            var bytes = Encoding.UTF8.GetBytes(json);
+            await socket.SendAsync(
+                new ArraySegment<byte>(bytes),
+                WebSocketMessageType.Text,
+                true,
+                CancellationToken.None);
+        }
+
+        // 添加 GenerateCallId 方法
+        private int _nextCallId = 1000;
+        private int GenerateCallId()
+        {
+            return Interlocked.Increment(ref _nextCallId);
+        }
         /// <summary>
         /// WebSocket连接信息
         /// </summary>

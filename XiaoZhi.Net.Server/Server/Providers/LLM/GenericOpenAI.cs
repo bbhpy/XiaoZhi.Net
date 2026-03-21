@@ -28,6 +28,9 @@ namespace XiaoZhi.Net.Server.Providers.LLM
         private int _seqParagraphId = 0;
         private int _seqSentenceId = 0;
 
+        // ✅ 添加并发锁
+        private readonly SemaphoreSlim _processingLock = new SemaphoreSlim(1, 1);
+        private bool _isProcessing = false;
         public GenericOpenAI(IChatAgent chatAgent,
             IEmotionAgent emotionAgent,
             ObjectPool<OutSegment> outSegmentPool,
@@ -82,24 +85,53 @@ namespace XiaoZhi.Net.Server.Providers.LLM
             base.RegisterDevice(deviceId, sessionId);
         }
 
-        public async Task StartDialogueAsync(string userMessage, CancellationToken token)
+        public async Task StartDialogueAsync(string userMessage,Session session, CancellationToken token)
         {
-            if (!this.CheckDeviceRegistered(this.DeviceId, this.SessionId))
+            if (session == null)
             {
-                throw new SessionNotInitializedException();
-            }
-            if (!this._subAgents.Any() || this._kernel is null)
-            {
-                this.Logger.LogError(Lang.GenericOpenAI_StartDialogueAsync_NotBuilt, this.ProviderType, this.ModelName);
+                this.Logger.LogError("Session 为空，无法处理对话");
                 return;
             }
-            if (this._chatAgent.UseStreaming)
+
+            // ✅ 使用 Session 的锁
+            if (!await session.AcquireDialogueLockAsync(0)) // 0 表示不等待，立即返回
             {
-                await this.ChatByStreamingAsync(userMessage, token);
+                this.Logger.LogWarning("设备 {DeviceId} 已有对话在处理中，跳过本次请求", session.DeviceId);
+                return;
             }
-            else
+            try
             {
-                await this.ChatAsync(userMessage, token);
+                if (!this.CheckDeviceRegistered(this.DeviceId, this.SessionId))
+                {
+                    throw new SessionNotInitializedException();
+                }
+                if (!this._subAgents.Any() || this._kernel is null)
+                {
+                    this.Logger.LogError(Lang.GenericOpenAI_StartDialogueAsync_NotBuilt, this.ProviderType, this.ModelName);
+                    return;
+                }
+                if (session.IsVoiceRecognitionActive())
+                {
+                    this.Logger.LogDebug("设备 {DeviceId} 语音识别进行中，等待 200ms", session.DeviceId);
+                    await Task.Delay(200, token);
+                }
+                if (this._chatAgent.UseStreaming)
+                {
+                    await this.ChatByStreamingAsync(userMessage, token);
+                }
+                else
+                {
+                    await this.ChatAsync(userMessage, token);
+                }
+            }
+            catch (Exception ex)
+            {
+                this.Logger.LogError(ex, "设备 {DeviceId} 对话处理异常", session.DeviceId);
+            }
+            finally
+            {
+                session.ReleaseDialogueLock();
+                this.Logger.LogDebug("设备 {DeviceId} 对话处理完成，释放锁", session.DeviceId);
             }
         }
         protected override string GenerateId()
@@ -138,8 +170,10 @@ namespace XiaoZhi.Net.Server.Providers.LLM
 
                 this.OnBeforeTokenGenerate?.Invoke();
 
+
                 string assistantResponse = await this._chatAgent.GenerateChatResponseAsync(userMessage, token);
                 token.ThrowIfCancellationRequested();
+
 
                 // ✅ 检查响应是否可能包含函数调用结果
                 if (assistantResponse.Contains("播放") || assistantResponse.Contains("音乐"))

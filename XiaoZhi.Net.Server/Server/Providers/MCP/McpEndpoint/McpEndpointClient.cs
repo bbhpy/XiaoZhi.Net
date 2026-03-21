@@ -4,11 +4,12 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
+using XiaoZhi.Net.Server.Common.Configs;
 using XiaoZhi.Net.Server.Common.Constants;
 using XiaoZhi.Net.Server.Helpers;
 using XiaoZhi.Net.Server.I18n;
 using XiaoZhi.Net.Server.Protocol.WebSocket;
-using XiaoZhi.Net.Server.Common.Configs;
+using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Providers.MCP.McpEndpoint
 {
@@ -24,8 +25,8 @@ internal class McpEndpointClient : BaseMcpClient<McpEndpointClient>, ISubMcpClie
     /// 初始化McpEndpointClient类的新实例
     /// </summary>
     /// <param name="logger">日志记录器实例</param>
-    public McpEndpointClient(ILogger<McpEndpointClient> logger) : base(logger)
-    {
+    public McpEndpointClient(ILogger<McpEndpointClient> logger, ToolRegistry toolRegistry) : base(logger, toolRegistry)
+        {
     }
 
     /// <summary>

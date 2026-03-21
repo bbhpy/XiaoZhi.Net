@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 using System;
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Common.Contexts;
@@ -31,14 +33,16 @@ internal class Audio2TextHandler : BaseHandler, IInHandler<float[]>, IOutHandler
     /// </summary>
     private IAsr? _asr;
 
-    /// <summary>
-    /// 初始化音频转文本处理器
-    /// </summary>
-    /// <param name="circularBufferWorkflowPool">音频缓冲工作流对象池</param>
-    /// <param name="stringWorkflowPool">字符串工作流对象池</param>
-    /// <param name="config">小知配置</param>
-    /// <param name="logger">日志记录器</param>
-    public Audio2TextHandler(ObjectPool<Workflow<float[]>> circularBufferWorkflowPool,
+    private readonly ConcurrentDictionary<string, bool> _processingDevices = new ConcurrentDictionary<string, bool>();
+
+        /// <summary>
+        /// 初始化音频转文本处理器
+        /// </summary>
+        /// <param name="circularBufferWorkflowPool">音频缓冲工作流对象池</param>
+        /// <param name="stringWorkflowPool">字符串工作流对象池</param>
+        /// <param name="config">小知配置</param>
+        /// <param name="logger">日志记录器</param>
+        public Audio2TextHandler(ObjectPool<Workflow<float[]>> circularBufferWorkflowPool,
         ObjectPool<Workflow<string>> stringWorkflowPool,
         XiaoZhiConfig config,
         ILogger<Audio2TextHandler> logger) : base(config, logger)
@@ -184,22 +188,61 @@ internal class Audio2TextHandler : BaseHandler, IInHandler<float[]>, IOutHandler
             this.Logger.LogDebug(Lang.Audio2TextHandler_OnSpeechTextConverted_NoSpeak, session.DeviceId);
             return;
         }
-
-        await this.SendOutter.SendSttMessageAsync(speechText);
-        this.Logger.LogDebug(Lang.Audio2TextHandler_OnSpeechTextConverted_SpeakText, session.DeviceId, speechText);
-
-        var nextWorkflow = this._stringWorkflowPool.Get();
-        nextWorkflow.Initialize(session, speechText);
-        
-        try
+        // 过滤太短的文本（少于2个有效字符）
+        string cleanedText = DialogueHelper.GetStringNoPunctuationOrEmoji(speechText);
+        if (cleanedText.Length < 2)
         {
-            await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
+            session.Reset();
+            this.Logger.LogDebug("设备 {DeviceId} 识别文本太短: '{SpeechText}'，忽略", session.DeviceId, speechText);
+            return;
         }
-        catch (OperationCanceledException)
+
+        // 过滤纯英文单词（可能是误识别）
+        if (Regex.IsMatch(cleanedText, @"^[A-Za-z]+$") && cleanedText.Length < 3)
         {
-            this._stringWorkflowPool.Return(nextWorkflow);
+            session.Reset();
+            this.Logger.LogDebug("设备 {DeviceId} 识别为英文短词: '{SpeechText}'，忽略", session.DeviceId, speechText);
+            return;
         }
-    }
+        // ✅ 检查设备是否正在处理对话
+        if (_processingDevices.TryGetValue(session.DeviceId, out bool isProcessing) && isProcessing)
+        {
+            this.Logger.LogDebug("设备 {DeviceId} 正在处理中，跳过本次ASR结果", session.DeviceId);
+            return;
+        }
+
+        // ✅ 标记设备开始处理
+        _processingDevices[session.DeviceId] = true;
+
+            try
+            {
+                await this.SendOutter.SendSttMessageAsync(speechText);
+                this.Logger.LogDebug(Lang.Audio2TextHandler_OnSpeechTextConverted_SpeakText, session.DeviceId, speechText);
+
+                var nextWorkflow = this._stringWorkflowPool.Get();
+                nextWorkflow.Initialize(session, speechText);
+
+                try
+                {
+                    await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    this._stringWorkflowPool.Return(nextWorkflow);
+                }
+            }
+            finally
+            {
+                _ = Task.Delay(2000).ContinueWith(_ =>
+                {
+                    bool removed = _processingDevices.TryRemove(session.DeviceId, out bool value);
+                    if (removed)
+                    {
+                        this.Logger.LogDebug("设备 {DeviceId} 处理标记已清除", session.DeviceId);
+                    }
+                });
+            }
+        }
 
     /// <summary>
     /// 释放资源

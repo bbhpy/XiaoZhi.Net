@@ -180,7 +180,7 @@ namespace XiaoZhi.Net.Server.Handlers
             {
                 using (CodeTimer timer = CodeTimer.Create(Lang.DialogueHandler_Handle_LlmCallTime, this.Logger))
                 {
-                    await this._llm.StartDialogueAsync(workflow.Data, this.HandlerToken);
+                    await this._llm.StartDialogueAsync(workflow.Data,session, this.HandlerToken);
                 }
             }
             catch (OperationCanceledException)

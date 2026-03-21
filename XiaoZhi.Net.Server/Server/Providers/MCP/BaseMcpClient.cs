@@ -11,10 +11,12 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using XiaoZhi.Net.Server.Common.Configs;
 using XiaoZhi.Net.Server.Common.Contexts;
 using XiaoZhi.Net.Server.Helpers;
 using XiaoZhi.Net.Server.I18n;
-using XiaoZhi.Net.Server.Common.Configs;
+using XiaoZhi.Net.Server.Server.Common.Constants;
+using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Providers.MCP
 {
@@ -56,13 +58,14 @@ namespace XiaoZhi.Net.Server.Providers.MCP
         /// </summary>
         private IDictionary<int, TaskCompletionSource<JsonObject>> _callResults = new ConcurrentDictionary<int, TaskCompletionSource<JsonObject>>();
 
+        private readonly ToolRegistry _toolRegistry;
         /// <summary>
         /// 初始化BaseMcpClient实例
         /// </summary>
         /// <param name="logger">日志记录器</param>
-        public BaseMcpClient(ILogger<TLogger> logger) : base(logger)
+        public BaseMcpClient(ILogger<TLogger> logger, ToolRegistry toolRegistry) : base(logger)
         {
-
+            _toolRegistry = toolRegistry;
         }
 
         /// <summary>
@@ -177,6 +180,12 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                             string toolName = item["name"]?.GetValue<string>() ?? "";
                             string toolDescription = item["description"]?.GetValue<string>() ?? "";
 
+                            if (!StaticDeputy.IsValidToolName(toolName))
+                            {
+                                this.Logger.LogWarning("工具名称 {ToolName} 包含非法字符，已跳过", toolName);
+                                continue;  // 跳过这个工具，不保存
+                            }
+
                             JsonObject inputSchema = item["inputSchema"]?.AsObject() ?? new JsonObject
                             {
                                 ["type"] = "object",
@@ -262,7 +271,6 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                 }
             }
         }
-
         /// <summary>
         /// 发送MCP初始化请求异步方法
         /// </summary>
@@ -483,7 +491,120 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                 throw;
             }
         }
+        /// <summary>
+        /// 更新该设备的三方工具（供 ThirdPartyToolRegistrar 调用）
+        /// </summary>
+        public async Task UpdateThirdPartyToolsAsync()
+        {
+            try
+            {
+                if (this.CurrentSession?.PrivateProvider?.Kernel == null)
+                {
+                    this.Logger.LogWarning("Kernel 未初始化，无法更新三方工具");
+                    return;
+                }
 
+                // 获取该设备绑定的所有三方工具
+                var thirdPartyTools = _toolRegistry.GetDeviceTools(this.CurrentSession.DeviceId);
+
+                if (thirdPartyTools == null || !thirdPartyTools.Any())
+                {
+                    this.Logger.LogDebug("设备 {DeviceId} 没有绑定的三方工具", this.CurrentSession.DeviceId);
+                    return;
+                }
+
+                var thirdPartyFunctions = new List<KernelFunction>();
+
+                foreach (var tool in thirdPartyTools)
+                {
+                    // 工具名转换：点号替换为占位符
+                    string functionName = tool.Name.Replace(REAL_DOT, DOT_PLACEHOLDER);
+
+                    // 解析参数
+                    var parameters = new List<KernelParameterMetadata>();
+                    if (tool.InputSchema != null &&
+                        tool.InputSchema.TryGetPropertyValue("properties", out var propsNode) &&
+                        propsNode is JsonObject properties)
+                    {
+                        foreach (var prop in properties)
+                        {
+                            if (prop.Value is JsonObject propObj)
+                            {
+                                var param = new KernelParameterMetadata(prop.Key)
+                                {
+                                    Description = propObj["description"]?.GetValue<string>() ?? string.Empty,
+                                    IsRequired = false
+                                };
+
+                                // 检查是否为必填参数
+                                if (tool.InputSchema.TryGetPropertyValue("required", out var requiredNode) &&
+                                    requiredNode is JsonArray requiredArray)
+                                {
+                                    param.IsRequired = requiredArray.Any(x => x?.GetValue<string>() == prop.Key);
+                                }
+
+                                // 判断参数类型
+                                var type = propObj["type"]?.GetValue<string>();
+                                if (type == "number" || type == "integer")
+                                    param.ParameterType = typeof(int);
+                                else
+                                    param.ParameterType = typeof(string);
+
+                                parameters.Add(param);
+                            }
+                        }
+                    }
+
+                    // 创建 KernelFunction - 使用同步包装异步调用
+                    var function = KernelFunctionFactory.CreateFromMethod(
+                        (KernelArguments args) =>
+                        {
+                            // 使用 Task.Run 包装异步调用，返回 Task<string>
+                            return Task.Run(async () =>
+                            {
+                                var result = await _toolRegistry.CallThirdPartyToolAsync(tool.Name, args);
+
+                                // 安全地解析结果
+                                if (result.TryGetPropertyValue("content", out var contentNode) &&
+                                    contentNode is JsonArray contentArray &&
+                                    contentArray.Count > 0 &&
+                                    contentArray[0] is JsonObject first &&
+                                    first.TryGetPropertyValue("text", out var textNode) &&
+                                    textNode != null)
+                                {
+                                    return textNode.GetValue<string>();
+                                }
+
+                                return result.ToJsonString();
+                            });
+                        },
+                        functionName,
+                        tool.Description,
+                        parameters);
+
+                    thirdPartyFunctions.Add(function);
+                }
+
+                // 移除旧的 ThirdPartyService 插件
+                var kernel = this.CurrentSession.PrivateProvider.Kernel;
+                if (kernel.Plugins.TryGetPlugin("ThirdPartyService", out var oldPlugin))
+                {
+                    kernel.Plugins.Remove(oldPlugin);
+                }
+
+                // 注册新的插件
+                if (thirdPartyFunctions.Any())
+                {
+                    kernel.ImportPluginFromFunctions("ThirdPartyService", thirdPartyFunctions);
+                    this.Logger.LogInformation("设备 {DeviceId} 已更新 {Count} 个三方工具",
+                        this.CurrentSession.DeviceId, thirdPartyFunctions.Count);
+                }
+            }
+            catch (Exception ex)
+            {
+                this.Logger.LogError(ex, "更新设备 {DeviceId} 的三方工具失败", this.CurrentSession.DeviceId);
+            }
+        }
         /// <summary>
         /// 抽象方法：发送MCP消息
         /// </summary>

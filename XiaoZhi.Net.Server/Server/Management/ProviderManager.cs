@@ -787,11 +787,7 @@ namespace XiaoZhi.Net.Server.Management
             services.AddKeyedTransient<ISubMcpClient, DeviceMcpClient>(SubMCPClientTypeNames.DeviceMcpClient);
             services.AddKeyedTransient<ISubMcpClient, McpEndpointClient>(SubMCPClientTypeNames.McpEndpointClient);
             services.AddKeyedTransient<ISubMcpClient, ServerMcpClient>(SubMCPClientTypeNames.ServerMcpClient);
-            services.AddTransient<IMcpClient, McpClient>();
-            services.AddSingleton<McpServiceStore>();
-            services.AddSingleton<TokenSessionRegistry>();
-            services.AddSingleton<McpServerEndpoint>();
-            services.AddSingleton<ToolRegistry>();
+
         }
 
         /// <summary>

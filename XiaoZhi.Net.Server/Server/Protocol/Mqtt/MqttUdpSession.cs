@@ -413,9 +413,9 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                 IsMqttConnected = false;
                 LastActiveTime = DateTime.Now; // 记录最后断开时间
 
-                // 3. 清理XiaoZhiSession（释放小知会话资源）
                 if (XiaoZhiSession != null)
                 {
+                    _tokenSessionRegistry.Unregister(XiaoZhiSession.DeviceToken);
                     XiaoZhiSession.Release();
                 }
 

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using MQTTnet;
 using MQTTnet.Server.Internal;
 using Serilog;
+using SuperSocket.Server.Abstractions.Session;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,9 +14,16 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Abstractions.Store;
+using XiaoZhi.Net.Server.Common.Constants;
 using XiaoZhi.Net.Server.Management;
+using XiaoZhi.Net.Server.Providers;
+using XiaoZhi.Net.Server.Providers.MCP;
+using XiaoZhi.Net.Server.Providers.MCP.DeviceMcp;
+using XiaoZhi.Net.Server.Providers.MCP.McpEndpoint;
+using XiaoZhi.Net.Server.Providers.MCP.ServerMcp;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts;
 using XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts;
+using XiaoZhi.Net.Server.Server.Providers.MCP;
 using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
@@ -109,14 +117,30 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                     };
                 });
 
-                // 8. 注册原生UdpClient实例（单例，绑定配置的端口）
+                // 8. 注册原生UdpClient实例（单例，双栈模式）
                 services.AddSingleton<UdpClient>(sp =>
                 {
                     var xiaoZhiConfig = sp.GetRequiredService<XiaoZhiConfig>();
-                    // 从配置读取UDP端口，默认8888
+                    var logger = sp.GetRequiredService<Serilog.ILogger>();
+
                     int udpPort = xiaoZhiConfig.UdpConfig.Port > 0 ? xiaoZhiConfig.UdpConfig.Port : 8888;
-                    // 绑定所有网卡的指定端口，支持多设备接入
-                    return new UdpClient(new IPEndPoint(IPAddress.Any, udpPort));
+
+                    // 关键：使用 IPAddress.IPv6Any 实现双栈监听
+                    // 这样会同时接收IPv4和IPv6的UDP数据包
+                    var localEndPoint = new IPEndPoint(IPAddress.IPv6Any, udpPort);
+
+                    var udpClient = new UdpClient(localEndPoint);
+
+                    // 重要：需要禁用IPv6 only模式，启用双栈
+                    // 这样IPv4连接会被映射为IPv6地址格式
+                    udpClient.Client.SetSocketOption(
+                        SocketOptionLevel.IPv6,
+                        SocketOptionName.IPv6Only,
+                        0); // 0 = false，禁用IPv6 Only模式
+
+                    logger.Information("UDP服务启动双栈模式，监听端口：{Port}，支持IPv4和IPv6连接", udpPort);
+
+                    return udpClient;
                 });
 
             });
@@ -126,12 +150,32 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         {
             return builder.ConfigureServices((context, services) =>
             {
+                // 1. 注册基础服务
+                services.AddSingleton<McpServiceStore>();
+
+                // 2. 注册 Token 注册表（ISessionContainer 由 SuperSocket 框架提供，不需要手动注册）
+                services.AddSingleton<TokenSessionRegistry>();
+
+                // 3. 注册 ToolRegistry 和 ThirdPartyToolRegistrar
+                services.AddSingleton<ToolRegistry>();
+                services.AddSingleton<ThirdPartyToolRegistrar>();
+
+                // 4. 注册 MCP 服务器端点
+                services.AddSingleton<McpServerEndpoint>();
+
+                // ⭐ 5. 注册子客户端
+                services.AddKeyedTransient<ISubMcpClient, DeviceMcpClient>(SubMCPClientTypeNames.DeviceMcpClient);
+                services.AddKeyedTransient<ISubMcpClient, McpEndpointClient>(SubMCPClientTypeNames.McpEndpointClient);
+                services.AddKeyedTransient<ISubMcpClient, ServerMcpClient>(SubMCPClientTypeNames.ServerMcpClient);
+                services.AddTransient<IMcpClient, McpClient>();
+
+                // ⭐ 6. 最后注册后台服务
                 services.AddHostedService(sp => new McpServerHostedService(
-                sp.GetRequiredService<McpServerEndpoint>(),
-                sp.GetRequiredService<ILogger<McpServerHostedService>>(),
-                config.McpServerEndpointConfig.Port,
-                config.McpServerEndpointConfig.Path
-            ));
+                    sp.GetRequiredService<McpServerEndpoint>(),
+                    sp.GetRequiredService<ILogger<McpServerHostedService>>(),
+                    config.McpServerEndpointConfig.Port,
+                    config.McpServerEndpointConfig.Path
+                ));
             });
         }
     }

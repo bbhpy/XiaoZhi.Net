@@ -95,7 +95,6 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts
 
             // 1. 创建MQTT服务端选项构建器（适配5.1.0.1559版本）
             var optionsBuilder = new MqttServerOptionsBuilder();
-
             // 2. 基础TCP配置
             optionsBuilder.WithDefaultEndpoint(); // 启用默认TCP端点（必填）
             optionsBuilder.WithDefaultEndpointPort(mqttConfig.Port); // 设置监听端口

@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Common.Configs;
 using XiaoZhi.Net.Server.Common.Constants;
 using XiaoZhi.Net.Server.Helpers;
+using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Providers.MCP.ServerMcp
 {
@@ -22,8 +23,8 @@ internal class ServerMcpClient : BaseMcpClient<ServerMcpClient>, ISubMcpClient
     /// 初始化ServerMcpClient实例
     /// </summary>
     /// <param name="logger">用于日志记录的ILogger实例</param>
-    public ServerMcpClient(ILogger<ServerMcpClient> logger) : base(logger)
-    {
+    public ServerMcpClient(ILogger<ServerMcpClient> logger, ToolRegistry toolRegistry) : base(logger, toolRegistry)
+        {
     }
 
     /// <summary>

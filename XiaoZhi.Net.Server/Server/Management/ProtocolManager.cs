@@ -5,6 +5,7 @@ using SuperSocket.Server.Host;
 using SuperSocket.WebSocket.Server;
 using System;
 using System.Collections.Generic;
+using System.Net;
 using XiaoZhi.Net.Server.Abstractions.Common.Enums;
 using XiaoZhi.Net.Server.Protocol.WebSocket;
 using XiaoZhi.Net.Server.Protocol.WebSocket.Contexts;
@@ -43,7 +44,7 @@ internal class ProtocolManager
 
                     ListenOptions listenOptions = new ListenOptions
                     {
-                        Ip = webSocketOption.IP,
+                        Ip = "IpV6Any",
                         Port = webSocketOption.Port,
                         Path = webSocketOption.Path
                     };

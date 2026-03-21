@@ -26,6 +26,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         private readonly ToolRegistry _toolRegistry;  // 新增
         private readonly TokenSessionRegistry _tokenRegistry;
         private readonly ConcurrentDictionary<string, McpServerConnection> _connections = new();
+        private readonly ThirdPartyToolRegistrar _toolRegistrar;
 
         private int _port;
         private string _path = "/mcp";
@@ -33,13 +34,12 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 
         public bool IsRunning => _isRunning;
         public int ActiveConnections => _connections.Count;
-
         public McpServerEndpoint(
-            ILogger<McpServerEndpoint> logger,
-            IServiceProvider serviceProvider,
-            McpServiceStore serviceStore,
-            ToolRegistry toolRegistry,  // 新增
-            TokenSessionRegistry tokenRegistry)
+                ILogger<McpServerEndpoint> logger,
+                IServiceProvider serviceProvider,
+                McpServiceStore serviceStore,
+                ToolRegistry toolRegistry,
+                TokenSessionRegistry tokenRegistry) 
         {
             _logger = logger;
             _serviceProvider = serviceProvider;

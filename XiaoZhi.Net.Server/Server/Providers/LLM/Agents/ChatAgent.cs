@@ -108,10 +108,15 @@ namespace XiaoZhi.Net.Server.Providers.LLM.Agents
 
             // 最多尝试3次，防止无限循环
             int maxRetries = 3;
-            string finalContent = string.Empty;
+            string finalContent = string.Empty; 
+            List<string> responseHistory = new List<string>();
 
             for (int retry = 0; retry < maxRetries; retry++)
             {
+                if (retry > 0)
+                {
+                    await Task.Delay(100, token);
+                }
                 var clientResult = await this._chatAgentService.GetChatMessageContentAsync(
                     this.ChatHistory,
                     this._chatExecutionSettings,
@@ -130,15 +135,46 @@ namespace XiaoZhi.Net.Server.Providers.LLM.Agents
                     // 继续下一次循环，让LLM基于函数结果生成响应
                     continue;
                 }
+                // 获取当前内容
+                string currentContent = clientResult.Content ?? string.Empty;
 
-                // 没有函数调用，获取最终内容
+                if (!string.IsNullOrWhiteSpace(currentContent) && responseHistory.Contains(currentContent))
+                {
+                    this.Logger.LogWarning("检测到重复响应内容，跳过本次处理");
+                    continue;
+                }
+
                 finalContent = clientResult.Content ?? string.Empty;
-                break;
+                if (!string.IsNullOrWhiteSpace(finalContent))
+                {
+                    responseHistory.Add(finalContent);
+                    break;
+                }
+            }
+            if (string.IsNullOrWhiteSpace(finalContent))
+            {
+                this.Logger.LogError("经过 {MaxRetries} 次尝试后，LLM仍返回空内容", maxRetries);
+                return string.Empty;
             }
 
             string assistantContent = ProcessAssistantContent(finalContent);
-            this.ChatHistory.AddAssistantMessage(assistantContent);
+
+            var lastAssistantMessage = this.ChatHistory
+                .Where(m => m.Role == AuthorRole.Assistant)
+                .LastOrDefault();
+
+            if (lastAssistantMessage != null && lastAssistantMessage.Content == assistantContent)
+            {
+                this.Logger.LogWarning("检测到重复的助手消息，跳过添加到历史");
+            }
+            else
+            {
+                this.ChatHistory.AddAssistantMessage(assistantContent);
+                this.Logger.LogDebug("已添加助手响应到对话历史，长度: {Length}", assistantContent.Length);
+            }
+
             return assistantContent;
+
         }
 
         // 添加内容处理方法

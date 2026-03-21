@@ -2,10 +2,11 @@
 using ModelContextProtocol.Protocol;
 using System;
 using System.Threading.Tasks;
+using XiaoZhi.Net.Server.Common.Configs;
 using XiaoZhi.Net.Server.Common.Constants;
 using XiaoZhi.Net.Server.Helpers;
 using XiaoZhi.Net.Server.I18n;
-using XiaoZhi.Net.Server.Common.Configs;
+using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Providers.MCP.DeviceMcp
 {
@@ -22,8 +23,8 @@ internal class DeviceMcpClient : BaseMcpClient<DeviceMcpClient>, ISubMcpClient
     /// 构造函数，初始化DeviceMcpClient实例
     /// </summary>
     /// <param name="logger">日志记录器实例</param>
-    public DeviceMcpClient(ILogger<DeviceMcpClient> logger) : base(logger)
-    {
+    public DeviceMcpClient(ILogger<DeviceMcpClient> logger, ToolRegistry toolRegistry) : base(logger, toolRegistry)
+        {
     }
 
     /// <summary>

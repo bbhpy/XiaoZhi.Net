@@ -30,7 +30,14 @@ namespace XiaoZhi.Net.Server.Common.Contexts
         /// 转换ID，用于标识会话中的不同转换
         /// </summary>
         private long _turnId = 0;
-
+        /// <summary>
+        /// 音频处理锁，用于控制音频处理任务的并发执行
+        /// </summary>
+        private readonly SemaphoreSlim _dialogueLock = new SemaphoreSlim(1, 1);
+        /// <summary>
+        /// 是否正在处理对话 0=未处理, 1=处理中
+        /// </summary>
+        private long _isProcessingDialogue = 0; 
         /// <summary>
         /// 初始化Session实例 websocket服务使用
         /// </summary>
@@ -205,7 +212,8 @@ namespace XiaoZhi.Net.Server.Common.Contexts
         /// </summary>
         public void Reset()
         {
-            Interlocked.Increment(ref this._turnId);
+            this.RejectIncomingAudio();
+            this.IncrementTurnId();
             //this.AcceptIncomingAudio();
             // 默认关闭门禁，等待第一个音频包触发
             this.RejectIncomingAudio(); // 改为关闭门禁
@@ -259,6 +267,12 @@ namespace XiaoZhi.Net.Server.Common.Contexts
             this.HandlerPipeline.Release();
             this.PrivateProvider.Release();
             this._sessionCts.Dispose();
+            // ✅ 释放对话锁
+            if (Interlocked.Read(ref _isProcessingDialogue) == 1)
+            {
+                this.ReleaseDialogueLock();
+            }
+            _dialogueLock.Dispose();
         }
 
         /// <summary>
@@ -293,6 +307,69 @@ namespace XiaoZhi.Net.Server.Common.Contexts
                 }
             });
         }
+        /// <summary>
+        /// 获取对话处理锁（异步）
+        /// </summary>
+        /// <param name="timeoutMs">超时时间（毫秒），0表示立即返回</param>
+        /// <returns>是否成功获取锁</returns>
+        public async Task<bool> AcquireDialogueLockAsync(int timeoutMs = 0)
+        {
+            // 先检查是否已经在处理中
+            if (Interlocked.Read(ref _isProcessingDialogue) == 1)
+            {
+                return false;
+            }
+
+            bool acquired = false;
+            if (timeoutMs == 0)
+            {
+                acquired = await _dialogueLock.WaitAsync(0);
+            }
+            else
+            {
+                acquired = await _dialogueLock.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs));
+            }
+
+            if (acquired)
+            {
+                Interlocked.Exchange(ref _isProcessingDialogue, 1);
+            }
+            return acquired;
+        }
+
+        /// <summary>
+        /// 释放对话处理锁
+        /// </summary>
+        public void ReleaseDialogueLock()
+        {
+            if (Interlocked.Exchange(ref _isProcessingDialogue, 0) == 1)
+            {
+                _dialogueLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// 检查是否正在处理对话
+        /// </summary>
+        public bool IsProcessingDialogue => Interlocked.Read(ref _isProcessingDialogue) == 1;
+
+        /// <summary>
+        /// 检查语音识别是否活跃（最后活动时间在2秒内）
+        /// </summary>
+        public bool IsVoiceRecognitionActive()
+        {
+            return (DateTime.Now - this.LastActivityTime) < TimeSpan.FromSeconds(2);
+        }
+
+        /// <summary>
+        /// 获取当前转换ID
+        /// </summary>
+        public long GetTurnId() => Interlocked.Read(ref _turnId);
+
+        /// <summary>
+        /// 增加转换ID
+        /// </summary>
+        public long IncrementTurnId() => Interlocked.Increment(ref _turnId);
         /// <summary>
         /// 返回会话的设备ID和会话ID信息
         /// </summary>

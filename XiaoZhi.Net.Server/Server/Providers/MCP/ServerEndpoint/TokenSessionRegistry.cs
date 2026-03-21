@@ -1,25 +1,85 @@
 ﻿using Microsoft.Extensions.Logging;
+using SuperSocket.Server.Abstractions.Session;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using XiaoZhi.Net.Server.Common.Contexts;
+using XiaoZhi.Net.Server.Protocol.WebSocket.Contexts;
+using XiaoZhi.Net.Server.Server.Protocol.Mqtt;
 
 namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 {
     /// <summary>
     /// Token 会话注册表
-    /// 维护 Token 和 SessionId 的映射关系
+    /// 维护 Token 和 Session 的映射关系
     /// </summary>
-    public class TokenSessionRegistry
+    internal class TokenSessionRegistry
     {
         private readonly ConcurrentDictionary<string, TokenSessionInfo> _tokenSessions = new();
         private readonly ILogger<TokenSessionRegistry> _logger;
 
-        public TokenSessionRegistry(ILogger<TokenSessionRegistry> logger)
+        // ⭐ 注入 Session 容器
+        private readonly ISessionContainer _sessionContainer;
+        private readonly MqttUdpSessionStore _mqttSessionStore;
+
+        public TokenSessionRegistry(
+            ILogger<TokenSessionRegistry> logger,
+            ISessionContainer sessionContainer,
+            MqttUdpSessionStore mqttSessionStore)
         {
             _logger = logger;
+            _sessionContainer = sessionContainer;
+            _mqttSessionStore = mqttSessionStore;
+        }
+
+        /// <summary>
+        /// 根据 token 获取 Session 对象
+        /// </summary>
+        public Session? GetSession(string token)
+        {
+            if (!_tokenSessions.TryGetValue(token, out var info))
+            {
+                _logger.LogDebug("Token {Token} 未找到对应的 Session 信息", token);
+                return null;
+            }
+
+            // 从 MQTT/UDP Session 容器中查找
+            var mqttSession = _mqttSessionStore.GetSession(info.SessionId);
+            if (mqttSession != null)
+            {
+                _logger.LogDebug("Token {Token} 从 MQTT 容器找到 Session {SessionId}", token, info.SessionId);
+                return mqttSession.XiaoZhiSession;
+            }
+
+            // 优先从 WebSocket Session 容器中查找\
+            var wsSession = _sessionContainer.GetSessionByID(info.SessionId) as SocketSession;
+            if (wsSession!=null)
+            {
+                _logger.LogDebug("Token {Token} 从 WebSocket 容器找到 Session {SessionId}", token, info.SessionId);
+                return wsSession.XiaoZhiSession;
+            }
+
+            _logger.LogWarning("Token {Token} 对应的 Session {SessionId} 不存在", token, info.SessionId);
+            return null;
+        }
+
+        /// <summary>
+        /// 根据 token 获取设备ID
+        /// </summary>
+        public string? GetDeviceId(string token)
+        {
+            return _tokenSessions.TryGetValue(token, out var info) ? info.DeviceId : null;
+        }
+
+        /// <summary>
+        /// 根据 token 获取 sessionId
+        /// </summary>
+        public string? GetSessionId(string token)
+        {
+            return _tokenSessions.TryGetValue(token, out var info) ? info.SessionId : null;
         }
 
         /// <summary>
@@ -45,14 +105,6 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         }
 
         /// <summary>
-        /// 根据 token 获取 sessionId
-        /// </summary>
-        public string? GetSessionId(string token)
-        {
-            return _tokenSessions.TryGetValue(token, out var info) ? info.SessionId : null;
-        }
-
-        /// <summary>
         /// 获取完整的token信息
         /// </summary>
         public TokenSessionInfo? GetTokenInfo(string token)
@@ -65,7 +117,12 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         /// </summary>
         public bool ValidateToken(string token)
         {
-            return _tokenSessions.ContainsKey(token);
+            if (!_tokenSessions.TryGetValue(token, out var info))
+                return false;
+
+            // 验证 Session 是否仍然存在
+            var session = GetSession(token);
+            return session != null;
         }
 
         /// <summary>
@@ -109,8 +166,8 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         /// </summary>
         public class TokenSessionInfo
         {
-            public string Token { get; set; }
-            public string SessionId { get; set; }
+            public string Token { get; set; } = string.Empty;
+            public string SessionId { get; set; } = string.Empty;
             public string? DeviceId { get; set; }
             public DateTime RegisteredAt { get; set; }
             public DateTime LastActive { get; set; }
