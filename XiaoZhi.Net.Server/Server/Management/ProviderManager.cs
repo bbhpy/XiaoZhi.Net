@@ -39,6 +39,7 @@ using XiaoZhi.Net.Server.Providers.TTS.Sherpa;
 using XiaoZhi.Net.Server.Providers.VAD.Native;
 using XiaoZhi.Net.Server.Providers.VAD.Sherpa;
 using XiaoZhi.Net.Server.Server.Providers.MCP;
+using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
 using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 using XiaoZhi.Net.Server.Services;
 
@@ -66,7 +67,8 @@ namespace XiaoZhi.Net.Server.Management
         /// </summary>
         private readonly ILogger<ProviderManager> _logger;
 
-
+        private readonly IEventPublisher _eventPublisher;
+        private readonly ThirdPartyToolRegistrar _toolRegistrar;
         /// <summary>
         /// 初始化 ProviderManager 类的新实例
         /// </summary>
@@ -74,12 +76,20 @@ namespace XiaoZhi.Net.Server.Management
         /// <param name="_globalKernel">全局内核</param>
         /// <param name="config">小智配置</param>
         /// <param name="logger">日志记录器</param>
-        public ProviderManager(IServiceProvider serviceProvider, Kernel _globalKernel, XiaoZhiConfig config, ILogger<ProviderManager> logger)
+        public ProviderManager(
+             IServiceProvider serviceProvider,
+             Kernel _globalKernel,
+             XiaoZhiConfig config,
+             ILogger<ProviderManager> logger,
+             IEventPublisher eventPublisher,
+             ThirdPartyToolRegistrar toolRegistrar)  // 新增
         {
             this._serviceProvider = serviceProvider;
             this._globalKernel = _globalKernel;
             this._config = config;
             this._logger = logger;
+            _eventPublisher = eventPublisher;
+            _toolRegistrar = toolRegistrar;
         }
 
         /// <summary>
@@ -387,6 +397,8 @@ namespace XiaoZhi.Net.Server.Management
 
                     this._logger.LogInformation(Lang.ProviderManager_InitializePrivateConfig_GenericTtsInitialized, genericTts.ModelName, session.DeviceId);
                 }
+                // 成功初始化后，刷新三方工具
+                await _toolRegistrar.RefreshDeviceToolsAsync(session.DeviceToken);
 
                 return true;
             }

@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Common.Contexts;
 using XiaoZhi.Net.Server.Protocol.WebSocket.Contexts;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt;
+using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
 
 namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 {
@@ -21,18 +22,21 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         private readonly ConcurrentDictionary<string, TokenSessionInfo> _tokenSessions = new();
         private readonly ILogger<TokenSessionRegistry> _logger;
 
+        private readonly IEventPublisher? _eventPublisher;
         // ⭐ 注入 Session 容器
         private readonly ISessionContainer _sessionContainer;
         private readonly MqttUdpSessionStore _mqttSessionStore;
 
         public TokenSessionRegistry(
-            ILogger<TokenSessionRegistry> logger,
-            ISessionContainer sessionContainer,
-            MqttUdpSessionStore mqttSessionStore)
+     ILogger<TokenSessionRegistry> logger,
+     ISessionContainer sessionContainer,
+     MqttUdpSessionStore mqttSessionStore,
+     IEventPublisher? eventPublisher = null)  // 可选参数，保持向后兼容
         {
             _logger = logger;
             _sessionContainer = sessionContainer;
             _mqttSessionStore = mqttSessionStore;
+            _eventPublisher = eventPublisher;
         }
 
         /// <summary>
@@ -102,6 +106,9 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             _tokenSessions[token] = info;
             _logger.LogDebug("Token registered: {Token} -> Session {SessionId}, Device {DeviceId}",
                 token, sessionId, deviceId ?? "unknown");
+
+            // 发布设备上线事件
+            _eventPublisher?.Publish(new DeviceOnlineEvent(token, sessionId, DateTime.UtcNow));
         }
 
         /// <summary>
@@ -145,6 +152,9 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             {
                 _logger.LogDebug("Token unregistered: {Token} -> Session {SessionId}, Device {DeviceId}",
                     token, info.SessionId, info.DeviceId ?? "unknown");
+
+                // 发布设备离线事件
+                _eventPublisher?.Publish(new DeviceOfflineEvent(token, DateTime.UtcNow));
             }
         }
 

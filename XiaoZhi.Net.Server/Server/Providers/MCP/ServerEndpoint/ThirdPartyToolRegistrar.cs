@@ -6,62 +6,145 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Common.Contexts;
 using XiaoZhi.Net.Server.Helpers;
+using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
 
 namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 {
     /// <summary>
-    /// 三方工具注册器，负责将三方工具动态注册到对应设备的 Kernel 中
+    /// 三方工具注册器
+    /// 订阅事件，负责将三方工具注册到对应设备的 Kernel 中
     /// </summary>
-    internal class ThirdPartyToolRegistrar
+    internal class ThirdPartyToolRegistrar : IDisposable
     {
         private const char DOT_PLACEHOLDER = '4';  // 点号占位符
         private const char REAL_DOT = '.';
 
         private readonly ILogger<ThirdPartyToolRegistrar> _logger;
         private readonly McpServiceStore _serviceStore;
+        private readonly ToolRouter _toolRouter;
         private readonly TokenSessionRegistry _tokenRegistry;
-        private readonly ToolRegistry _toolRegistry;
+        private readonly IEventPublisher _eventPublisher;
+        private readonly McpToolInvoker _toolInvoker;
 
         // 记录每个设备当前已注册的工具名（用于去重和更新）
         private readonly ConcurrentDictionary<string, HashSet<string>> _deviceRegisteredTools = new();
 
+        // 事件订阅的取消令牌
+        private readonly List<IDisposable> _subscriptions = new();
+
         public ThirdPartyToolRegistrar(
             ILogger<ThirdPartyToolRegistrar> logger,
             McpServiceStore serviceStore,
+            ToolRouter toolRouter,
             TokenSessionRegistry tokenRegistry,
-            ToolRegistry toolRegistry)
+            IEventPublisher eventPublisher,
+            McpToolInvoker toolInvoker)
         {
             _logger = logger;
             _serviceStore = serviceStore;
+            _toolRouter = toolRouter;
             _tokenRegistry = tokenRegistry;
-            _toolRegistry = toolRegistry;
+            _eventPublisher = eventPublisher;
+            _toolInvoker = toolInvoker;
+
+            // 订阅事件
+            _subscriptions.Add(_eventPublisher.Subscribe<ServiceBoundEvent>(OnServiceBound));
+            _subscriptions.Add(_eventPublisher.Subscribe<DeviceOnlineEvent>(OnDeviceOnline));
+            _subscriptions.Add(_eventPublisher.Subscribe<ServiceUnboundEvent>(OnServiceUnbound));
+
+            _logger.LogInformation("ThirdPartyToolRegistrar 已启动，订阅了服务绑定和设备上线事件");
         }
 
         /// <summary>
-        /// 当三方服务工具列表更新时调用，将该设备的所有三方工具注册到 Kernel
+        /// 处理服务绑定事件（三方服务连接并发送工具列表后触发）
         /// </summary>
-        /// <param name="deviceToken">设备Token</param>
-        /// <param name="serviceId">服务ID（可选，用于日志）</param>
-        public async Task RegisterToolsForDeviceAsync(string deviceToken, string serviceId)
+        private async void OnServiceBound(ServiceBoundEvent @event)
         {
             try
             {
-                _logger.LogInformation("开始为设备 {DeviceToken} 注册三方工具，服务: {ServiceId}", deviceToken, serviceId);
+                _logger.LogInformation("收到服务绑定事件: 设备 {DeviceToken}, 服务 {ServiceId}",
+                    @event.DeviceToken, @event.ServiceId);
 
-                // 1. 通过 token 获取 session
-                var session = _tokenRegistry.GetSession(deviceToken);
+                // 检查设备是否在线
+                var session = _tokenRegistry.GetSession(@event.DeviceToken);
                 if (session == null)
                 {
-                    _logger.LogWarning("无法找到设备 {DeviceToken} 的 Session，可能设备未连接", deviceToken);
+                    _logger.LogDebug("设备 {DeviceToken} 不在线，跳过立即注册，等待设备上线",
+                        @event.DeviceToken);
                     return;
                 }
 
-                _logger.LogDebug("设备 {DeviceToken} 的 Session 已找到，SessionId: {SessionId}", deviceToken, session.SessionId);
+                // 设备在线，立即注册该服务
+                await RegisterServiceForDeviceAsync(@event.DeviceToken, @event.ServiceId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "处理服务绑定事件失败: 设备 {DeviceToken}, 服务 {ServiceId}",
+                    @event.DeviceToken, @event.ServiceId);
+            }
+        }
 
-                // 2. 获取该设备绑定的所有三方工具
+        /// <summary>
+        /// 处理设备上线事件
+        /// </summary>
+        private async void OnDeviceOnline(DeviceOnlineEvent @event)
+        {
+            try
+            {
+                _logger.LogInformation("收到设备上线事件: 设备 {DeviceToken}, 会话 {SessionId}",
+                    @event.DeviceToken, @event.SessionId);
+
+                // 设备上线，注册所有绑定的三方工具
+                await RegisterToolsForDeviceAsync(@event.DeviceToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "处理设备上线事件失败: 设备 {DeviceToken}", @event.DeviceToken);
+            }
+        }
+
+        /// <summary>
+        /// 处理服务解绑事件（三方服务断开连接时触发）
+        /// </summary>
+        private async void OnServiceUnbound(ServiceUnboundEvent @event)
+        {
+            try
+            {
+                _logger.LogInformation("收到服务解绑事件: 设备 {DeviceToken}, 服务 {ServiceId}",
+                    @event.DeviceToken, @event.ServiceId);
+
+                // 检查设备是否在线
+                var session = _tokenRegistry.GetSession(@event.DeviceToken);
+                if (session == null)
+                {
+                    _logger.LogDebug("设备 {DeviceToken} 不在线，跳过清理", @event.DeviceToken);
+                    return;
+                }
+
+                // 设备在线，移除该服务的工具并重新注册剩余工具
+                await UnregisterServiceForDeviceAsync(@event.DeviceToken, @event.ServiceId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "处理服务解绑事件失败: 设备 {DeviceToken}, 服务 {ServiceId}",
+                    @event.DeviceToken, @event.ServiceId);
+            }
+        }
+
+        /// <summary>
+        /// 为设备注册所有三方工具（设备上线时调用）
+        /// </summary>
+        public async Task RegisterToolsForDeviceAsync(string deviceToken)
+        {
+            try
+            {
+                _logger.LogInformation("开始为设备 {DeviceToken} 注册三方工具", deviceToken);
+
+                // 获取该设备绑定的所有三方工具
                 var allTools = _serviceStore.GetAllToolsByDevice(deviceToken);
                 if (allTools == null || !allTools.Any())
                 {
@@ -69,113 +152,17 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     return;
                 }
 
-                _logger.LogInformation("设备 {DeviceToken} 共有 {Count} 个三方工具待注册", deviceToken, allTools.Count);
+                _logger.LogInformation("设备 {DeviceToken} 共有 {Count} 个三方工具待注册",
+                    deviceToken, allTools.Count);
 
-                // 3. 获取设备的 Kernel
-                var kernel = session.PrivateProvider?.Kernel;
-                if (kernel == null)
+                // 按服务分组注册
+                var bindings = _serviceStore.GetBindingsByDevice(deviceToken);
+                foreach (var binding in bindings)
                 {
-                    _logger.LogWarning("设备 {DeviceToken} 的 Kernel 未初始化", deviceToken);
-                    return;
-                }
-
-                // 4. 构建 KernelFunction 列表
-                var functions = new List<KernelFunction>();
-                var toolNames = new HashSet<string>();
-
-                foreach (var tool in allTools)
-                {
-                    // 工具名转换：点号替换为占位符
-                    string functionName = tool.Name.Replace(REAL_DOT, DOT_PLACEHOLDER);
-                    toolNames.Add(functionName);
-
-                    // 解析参数
-                    var parameters = new List<KernelParameterMetadata>();
-                    if (tool.InputSchema != null &&
-                        tool.InputSchema.TryGetPropertyValue("properties", out var propsNode) &&
-                        propsNode is JsonObject properties)
+                    if (binding.Tools != null && binding.Tools.Any())
                     {
-                        foreach (var prop in properties)
-                        {
-                            if (prop.Value is JsonObject propObj)
-                            {
-                                var param = new KernelParameterMetadata(prop.Key)
-                                {
-                                    Description = propObj["description"]?.GetValue<string>() ?? string.Empty,
-                                    IsRequired = false
-                                };
-
-                                // 检查是否为必填参数
-                                if (tool.InputSchema.TryGetPropertyValue("required", out var requiredNode) &&
-                                    requiredNode is JsonArray requiredArray)
-                                {
-                                    param.IsRequired = requiredArray.Any(x => x?.GetValue<string>() == prop.Key);
-                                }
-
-                                // 判断参数类型
-                                var type = propObj["type"]?.GetValue<string>();
-                                if (type == "number" || type == "integer")
-                                    param.ParameterType = typeof(int);
-                                else
-                                    param.ParameterType = typeof(string);
-
-                                parameters.Add(param);
-                            }
-                        }
+                        await RegisterServiceInternalAsync(deviceToken, binding.ServiceId, binding.Tools);
                     }
-
-                    // 创建 KernelFunction - 捕获 tool 变量
-                    var capturedTool = tool;
-                    var function = KernelFunctionFactory.CreateFromMethod(
-                        async (KernelArguments args) =>
-                        {
-                            _logger.LogDebug("调用三方工具: {ToolName}, 参数: {Args}", capturedTool.Name, args.ToJson());
-
-                            var result = await _toolRegistry.CallThirdPartyToolAsync(capturedTool.Name, args);
-
-                            // 安全地解析结果
-                            if (result.TryGetPropertyValue("content", out var contentNode) &&
-                                contentNode is JsonArray contentArray &&
-                                contentArray.Count > 0 &&
-                                contentArray[0] is JsonObject first &&
-                                first.TryGetPropertyValue("text", out var textNode) &&
-                                textNode != null)
-                            {
-                                return textNode.GetValue<string>();
-                            }
-
-                            return result.ToJsonString();
-                        },
-                        functionName,
-                        tool.Description,
-                        parameters);
-
-                    functions.Add(function);
-                    _logger.LogDebug("准备注册三方工具: {OriginalName} -> {FunctionName}", tool.Name, functionName);
-                }
-
-                // 5. 移除旧的 ThirdPartyService 插件（如果存在）
-                if (kernel.Plugins.TryGetPlugin("ThirdPartyService", out var oldPlugin))
-                {
-                    _logger.LogDebug("移除旧的 ThirdPartyService 插件，原包含 {Count} 个工具",
-                        oldPlugin.Count());
-                    kernel.Plugins.Remove(oldPlugin);
-                }
-
-                // 6. 注册新的 ThirdPartyService 插件
-                if (functions.Any())
-                {
-                    kernel.ImportPluginFromFunctions("ThirdPartyService", functions);
-
-                    // 记录已注册的工具
-                    _deviceRegisteredTools[deviceToken] = toolNames;
-
-                    _logger.LogInformation("✅ 设备 {DeviceToken} 已注册 {Count} 个三方工具: {Tools}",
-                        deviceToken, functions.Count, string.Join(", ", toolNames));
-                }
-                else
-                {
-                    _logger.LogDebug("设备 {DeviceToken} 没有需要注册的三方工具", deviceToken);
                 }
             }
             catch (Exception ex)
@@ -185,18 +172,182 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         }
 
         /// <summary>
-        /// 当三方服务断开时，从 Kernel 中移除该服务的工具
+        /// 为设备注册单个服务（动态绑定时调用）
         /// </summary>
-        /// <param name="deviceToken">设备Token</param>
-        /// <param name="serviceId">服务ID（可选，用于日志）</param>
-        public async Task UnregisterToolsForDeviceAsync(string deviceToken, string serviceId)
+        public async Task RegisterServiceForDeviceAsync(string deviceToken, string serviceId)
         {
             try
             {
-                _logger.LogInformation("开始为设备 {DeviceToken} 移除三方工具，服务: {ServiceId}", deviceToken, serviceId);
+                var binding = _serviceStore.GetBinding(deviceToken, serviceId);
+                if (binding == null || binding.Tools == null || !binding.Tools.Any())
+                {
+                    _logger.LogWarning("设备 {DeviceToken} 服务 {ServiceId} 没有工具定义",
+                        deviceToken, serviceId);
+                    return;
+                }
+
+                await RegisterServiceInternalAsync(deviceToken, serviceId, binding.Tools);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "为设备 {DeviceToken} 服务 {ServiceId} 注册工具失败",
+                    deviceToken, serviceId);
+            }
+        }
+
+        /// <summary>
+        /// 内部注册方法
+        /// </summary>
+        private async Task RegisterServiceInternalAsync(string deviceToken, string serviceId, List<ToolDefinition> tools)
+        {
+            var session = _tokenRegistry.GetSession(deviceToken);
+            if (session == null)
+            {
+                _logger.LogWarning("设备 {DeviceToken} 的 Session 不存在，跳过注册", deviceToken);
+                return;
+            }
+
+            var kernel = session.PrivateProvider?.Kernel;
+            if (kernel == null)
+            {
+                _logger.LogWarning("设备 {DeviceToken} 的 Kernel 未初始化", deviceToken);
+                return;
+            }
+
+            // 构建 KernelFunction 列表
+            var functions = new List<KernelFunction>();
+            var toolNames = new HashSet<string>();
+
+            foreach (var tool in tools)
+            {
+                // 工具名转换：点号替换为占位符
+                string functionName = tool.Name.Replace(REAL_DOT, DOT_PLACEHOLDER);
+                toolNames.Add(functionName);
+
+                // 解析参数
+                var parameters = ParseParameters(tool);
+
+                // 创建 KernelFunction - 捕获变量（注意：tool.Name 在闭包中使用）
+                var capturedToolName = tool.Name;
+                var function = KernelFunctionFactory.CreateFromMethod(
+                    async (KernelArguments args, CancellationToken cancellationToken) =>
+                    {
+                        _logger.LogDebug("调用三方工具: {ToolName}, 参数: {Args}",
+                            capturedToolName, args.ToJson());
+
+                        // 实际调用三方服务
+                        return await _toolInvoker.InvokeAsync(capturedToolName, args, cancellationToken);
+                    },
+                    functionName,
+                    tool.Description,
+                    parameters);
+
+                functions.Add(function);
+                _logger.LogDebug("准备注册三方工具: {OriginalName} -> {FunctionName}",
+                    tool.Name, functionName);
+            }
+
+            // 获取或创建插件
+            const string pluginName = "ThirdPartyService";
+
+            // 移除旧的插件（如果存在）
+            if (kernel.Plugins.TryGetPlugin(pluginName, out var oldPlugin))
+            {
+                kernel.Plugins.Remove(oldPlugin);
+                _logger.LogDebug("移除旧的 {PluginName} 插件", pluginName);
+            }
+
+            // 注册新的插件
+            if (functions.Any())
+            {
+                kernel.ImportPluginFromFunctions(pluginName, functions);
+
+                // 记录已注册的工具
+                var existingTools = _deviceRegisteredTools.GetOrAdd(deviceToken, _ => new HashSet<string>());
+                foreach (var fnName in toolNames)
+                {
+                    existingTools.Add(fnName);
+                }
+
+                // 注册路由到 ToolRouter
+                foreach (var tool in tools)
+                {
+                    _toolRouter.RegisterRoute(tool.Name, deviceToken, serviceId);
+                }
+
+                _logger.LogInformation("设备 {DeviceToken} 服务 {ServiceId} 已注册 {Count} 个三方工具: {Tools}",
+                    deviceToken, serviceId, functions.Count, string.Join(", ", toolNames));
+            }
+        }
+
+        /// <summary>
+        /// 解析工具参数元数据
+        /// </summary>
+        private List<KernelParameterMetadata> ParseParameters(ToolDefinition tool)
+        {
+            var parameters = new List<KernelParameterMetadata>();
+
+            if (tool.InputSchema != null &&
+                tool.InputSchema.TryGetPropertyValue("properties", out var propsNode) &&
+                propsNode is JsonObject properties)
+            {
+                // 获取必填参数列表
+                var requiredParams = new HashSet<string>();
+                if (tool.InputSchema.TryGetPropertyValue("required", out var requiredNode) &&
+                    requiredNode is JsonArray requiredArray)
+                {
+                    foreach (var item in requiredArray)
+                    {
+                        if (item?.GetValue<string>() is string reqName)
+                            requiredParams.Add(reqName);
+                    }
+                }
+
+                foreach (var prop in properties)
+                {
+                    if (prop.Value is JsonObject propObj)
+                    {
+                        var param = new KernelParameterMetadata(prop.Key)
+                        {
+                            Description = propObj["description"]?.GetValue<string>() ?? string.Empty,
+                            IsRequired = requiredParams.Contains(prop.Key)
+                        };
+
+                        // 判断参数类型
+                        var type = propObj["type"]?.GetValue<string>();
+                        param.ParameterType = type switch
+                        {
+                            "number" or "integer" => typeof(int),
+                            "boolean" => typeof(bool),
+                            "array" => typeof(string[]),
+                            _ => typeof(string)
+                        };
+
+                        parameters.Add(param);
+                    }
+                }
+            }
+
+            return parameters;
+        }
+
+        /// <summary>
+        /// 移除设备的指定服务工具
+        /// </summary>
+        public async Task UnregisterServiceForDeviceAsync(string deviceToken, string serviceId)
+        {
+            try
+            {
+                _logger.LogInformation("开始为设备 {DeviceToken} 移除服务 {ServiceId} 的工具",
+                    deviceToken, serviceId);
+
+                // 移除路由
+                _toolRouter.UnregisterServiceRoutes(deviceToken, serviceId);
 
                 // 获取该设备剩余的三方工具
-                var remainingTools = _serviceStore.GetAllToolsByDevice(deviceToken);
+                var remainingBindings = _serviceStore.GetBindingsByDevice(deviceToken)
+                    .Where(b => b.ServiceId != serviceId)
+                    .ToList();
 
                 var session = _tokenRegistry.GetSession(deviceToken);
                 if (session == null)
@@ -208,10 +359,12 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                 var kernel = session.PrivateProvider?.Kernel;
                 if (kernel == null) return;
 
+                const string pluginName = "ThirdPartyService";
+
                 // 如果没有剩余工具，直接移除整个插件
-                if (remainingTools == null || !remainingTools.Any())
+                if (!remainingBindings.Any() || remainingBindings.All(b => b.Tools == null || !b.Tools.Any()))
                 {
-                    if (kernel.Plugins.TryGetPlugin("ThirdPartyService", out var plugin))
+                    if (kernel.Plugins.TryGetPlugin(pluginName, out var plugin))
                     {
                         kernel.Plugins.Remove(plugin);
                         _deviceRegisteredTools.TryRemove(deviceToken, out _);
@@ -221,20 +374,90 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                 }
 
                 // 有剩余工具，重新注册（更新插件）
-                await RegisterToolsForDeviceAsync(deviceToken, serviceId);
+                await RegisterRemainingToolsAsync(deviceToken, remainingBindings);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "为设备 {DeviceToken} 移除三方工具失败", deviceToken);
+                _logger.LogError(ex, "为设备 {DeviceToken} 移除服务 {ServiceId} 工具失败",
+                    deviceToken, serviceId);
             }
         }
 
         /// <summary>
-        /// 刷新指定设备的所有三方工具（当工具列表发生变化时调用）
+        /// 为设备注册剩余工具（实际调用版本）
+        /// </summary>
+        private async Task RegisterRemainingToolsAsync(string deviceToken, List<ServiceBinding> remainingBindings)
+        {
+            var session = _tokenRegistry.GetSession(deviceToken);
+            if (session == null) return;
+
+            var kernel = session.PrivateProvider?.Kernel;
+            if (kernel == null) return;
+
+            var allFunctions = new List<KernelFunction>();
+            var allToolNames = new HashSet<string>();
+
+            foreach (var binding in remainingBindings)
+            {
+                if (binding.Tools == null) continue;
+
+                foreach (var tool in binding.Tools)
+                {
+                    string functionName = tool.Name.Replace(REAL_DOT, DOT_PLACEHOLDER);
+                    allToolNames.Add(functionName);
+
+                    // 解析参数
+                    var parameters = ParseParameters(tool);
+
+                    // 创建 KernelFunction - 实际调用
+                    var capturedToolName = tool.Name;
+                    var function = KernelFunctionFactory.CreateFromMethod(
+                        async (KernelArguments args, CancellationToken cancellationToken) =>
+                        {
+                            _logger.LogDebug("调用三方工具: {ToolName}, 参数: {Args}",
+                                capturedToolName, args.ToJson());
+
+                            return await _toolInvoker.InvokeAsync(capturedToolName, args, cancellationToken);
+                        },
+                        functionName,
+                        tool.Description,
+                        parameters);
+
+                    allFunctions.Add(function);
+                }
+            }
+
+            const string pluginName = "ThirdPartyService";
+            if (kernel.Plugins.TryGetPlugin(pluginName, out var oldPlugin))
+            {
+                kernel.Plugins.Remove(oldPlugin);
+            }
+
+            if (allFunctions.Any())
+            {
+                kernel.ImportPluginFromFunctions(pluginName, allFunctions);
+                _deviceRegisteredTools[deviceToken] = allToolNames;
+                _logger.LogInformation("设备 {DeviceToken} 已重新注册 {Count} 个剩余三方工具",
+                    deviceToken, allFunctions.Count);
+            }
+        }
+
+        /// <summary>
+        /// 刷新指定设备的所有三方工具
         /// </summary>
         public async Task RefreshDeviceToolsAsync(string deviceToken)
         {
-            await RegisterToolsForDeviceAsync(deviceToken, string.Empty);
+            await RegisterToolsForDeviceAsync(deviceToken);
+        }
+
+        public void Dispose()
+        {
+            foreach (var subscription in _subscriptions)
+            {
+                subscription?.Dispose();
+            }
+            _subscriptions.Clear();
+            _logger.LogInformation("ThirdPartyToolRegistrar 已释放");
         }
     }
 }

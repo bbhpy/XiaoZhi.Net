@@ -24,6 +24,7 @@ using XiaoZhi.Net.Server.Providers.MCP.ServerMcp;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts;
 using XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts;
 using XiaoZhi.Net.Server.Server.Providers.MCP;
+using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
 using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
@@ -150,19 +151,27 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         {
             return builder.ConfigureServices((context, services) =>
             {
-                // 1. 注册基础服务
+                // 1. 注册事件系统
+                services.AddSingleton<IEventPublisher, EventPublisher>();
+
+                // 2. 注册数据存储（重写后的）
                 services.AddSingleton<McpServiceStore>();
 
-                // 2. 注册 Token 注册表（ISessionContainer 由 SuperSocket 框架提供，不需要手动注册）
+                // 3. 注册路由层组件
+                services.AddSingleton<ToolRouter>();
+                services.AddSingleton<McpConnectionManager>();
+                services.AddSingleton<McpCallManager>();
+
+                // 4. 注册 Token 注册表
                 services.AddSingleton<TokenSessionRegistry>();
 
-                // 3. 注册 ToolRegistry 和 ThirdPartyToolRegistrar
-                services.AddSingleton<ToolRegistry>();
+                // 5. 注册业务逻辑层
                 services.AddSingleton<ThirdPartyToolRegistrar>();
+                services.AddSingleton<DeviceOnlineHandler>();
 
-                // 4. 注册 MCP 服务器端点
+                // 6. 注册 MCP 服务器端点
                 services.AddSingleton<McpServerEndpoint>();
-
+                services.AddSingleton<McpToolInvoker>();
                 // ⭐ 5. 注册子客户端
                 services.AddKeyedTransient<ISubMcpClient, DeviceMcpClient>(SubMCPClientTypeNames.DeviceMcpClient);
                 services.AddKeyedTransient<ISubMcpClient, McpEndpointClient>(SubMCPClientTypeNames.McpEndpointClient);

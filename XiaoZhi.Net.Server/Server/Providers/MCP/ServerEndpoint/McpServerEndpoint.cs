@@ -15,6 +15,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 {
     /// <summary>
     /// MCP服务端端点，监听端口接受三方MCP服务的WebSocket连接
+    /// 简化版：只负责监听和接受连接，不处理业务逻辑
     /// </summary>
     internal class McpServerEndpoint : IMcpServerEndpoint
     {
@@ -22,11 +23,8 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         private CancellationTokenSource? _cts;
         private readonly ILogger<McpServerEndpoint> _logger;
         private readonly IServiceProvider _serviceProvider;
-        private readonly McpServiceStore _serviceStore;
-        private readonly ToolRegistry _toolRegistry;  // 新增
         private readonly TokenSessionRegistry _tokenRegistry;
         private readonly ConcurrentDictionary<string, McpServerConnection> _connections = new();
-        private readonly ThirdPartyToolRegistrar _toolRegistrar;
 
         private int _port;
         private string _path = "/mcp";
@@ -34,17 +32,14 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 
         public bool IsRunning => _isRunning;
         public int ActiveConnections => _connections.Count;
+
         public McpServerEndpoint(
-                ILogger<McpServerEndpoint> logger,
-                IServiceProvider serviceProvider,
-                McpServiceStore serviceStore,
-                ToolRegistry toolRegistry,
-                TokenSessionRegistry tokenRegistry) 
+            ILogger<McpServerEndpoint> logger,
+            IServiceProvider serviceProvider,
+            TokenSessionRegistry tokenRegistry)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
-            _serviceStore = serviceStore;
-            _toolRegistry = toolRegistry;
             _tokenRegistry = tokenRegistry;
         }
 
@@ -139,6 +134,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         private async Task HandleWebSocketConnectionAsync(HttpListenerContext context)
         {
             WebSocketContext? wsContext = null;
+            string? connectionId = null;
             try
             {
                 // 从URL中解析token参数
@@ -173,20 +169,20 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     return;
                 }
 
-                // token有效，才接受WebSocket连接
+                // token有效，接受WebSocket连接
                 wsContext = await context.AcceptWebSocketAsync(null);
-                _logger.LogInformation("New WebSocket connection from {RemoteEndPoint} with valid token: {Token}",
-                    context.Request.RemoteEndPoint, deviceToken);
+                connectionId = Guid.NewGuid().ToString("N");
 
-                // 创建连接实例处理，传入验证好的token和ToolRegistry
+                _logger.LogInformation("New WebSocket connection from {RemoteEndPoint} with valid token: {Token}, ConnectionId: {ConnectionId}",
+                    context.Request.RemoteEndPoint, deviceToken, connectionId);
+
+                // 创建连接实例
                 var connection = ActivatorUtilities.CreateInstance<McpServerConnection>(
                     _serviceProvider,
                     wsContext.WebSocket,
-                    _serviceStore,
-                    _toolRegistry,  // 传入ToolRegistry
-                    deviceToken);
+                    deviceToken,
+                    connectionId);
 
-                var connectionId = Guid.NewGuid().ToString("N");
                 _connections[connectionId] = connection;
 
                 // 处理连接（这里会等待直到连接关闭）

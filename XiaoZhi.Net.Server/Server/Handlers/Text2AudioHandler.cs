@@ -12,415 +12,279 @@ using XiaoZhi.Net.Server.Providers.TTS;
 
 namespace XiaoZhi.Net.Server.Handlers
 {
-/// <summary>
-/// 文本转音频处理器，负责将文本转换为音频并处理音频播放相关功能
-/// </summary>
-internal class Text2AudioHandler : BaseHandler, IInHandler<OutSegment>, IOutHandler<OutAudioSegment, OutAudioSegment, OutAudioSegment>, ITtsEventCallback
-{
-    /// <summary>
-    /// 输出段对象池
-    /// </summary>
-    private readonly ObjectPool<OutSegment> _outSegmentPool;
-    
-    /// <summary>
-    /// 输出音频段对象池
-    /// </summary>
-    private readonly ObjectPool<OutAudioSegment> _outAudioSegmentPool;
-    
-    /// <summary>
-    /// 输出音频段工作流对象池
-    /// </summary>
-    private readonly ObjectPool<Workflow<OutAudioSegment>> _outAudioSegmentWorkflowPool;
-    
-    /// <summary>
-    /// 输出段工作流对象池
-    /// </summary>
-    private readonly ObjectPool<Workflow<OutSegment>> _outSegmentWorkflowPool;
-
-    /// <summary>
-    /// 文本转语音服务实例
-    /// </summary>
-    private ITts? _tts;
-    
-    /// <summary>
-    /// 音频播放客户端实例
-    /// </summary>
-    private IAudioPlayerClient? _audioPlayerClient;
-
-    /// <summary>
-    /// 初始化Text2AudioHandler的新实例
-    /// </summary>
-    /// <param name="outSegmentPool">输出段对象池</param>
-    /// <param name="outAudioSegmentPool">输出音频段对象池</param>
-    /// <param name="outAudioSegmentWorkflowPool">输出音频段工作流对象池</param>
-    /// <param name="outSegmentWorkflowPool">输出段工作流对象池</param>
-    /// <param name="config">小智配置</param>
-    /// <param name="logger">日志记录器</param>
-    public Text2AudioHandler(ObjectPool<OutSegment> outSegmentPool,
-
-        ObjectPool<OutAudioSegment> outAudioSegmentPool,
-        ObjectPool<Workflow<OutAudioSegment>> outAudioSegmentWorkflowPool,
-        ObjectPool<Workflow<OutSegment>> outSegmentWorkflowPool,
-        XiaoZhiConfig config,
-        ILogger<Text2AudioHandler> logger) : base(config, logger)
+    internal class Text2AudioHandler : BaseHandler, IInHandler<OutSegment>, IOutHandler<OutAudioSegment, OutAudioSegment, OutAudioSegment>, ITtsEventCallback
     {
-        this._outSegmentPool = outSegmentPool;
-        this._outAudioSegmentPool = outAudioSegmentPool;
-        this._outAudioSegmentWorkflowPool = outAudioSegmentWorkflowPool;
-        this._outSegmentWorkflowPool = outSegmentWorkflowPool;
-    }
+        private readonly ObjectPool<OutSegment> _outSegmentPool;
+        private readonly ObjectPool<OutAudioSegment> _outAudioSegmentPool;
+        private readonly ObjectPool<Workflow<OutAudioSegment>> _outAudioSegmentWorkflowPool;
+        private readonly ObjectPool<Workflow<OutSegment>> _outSegmentWorkflowPool;
 
-    /// <summary>
-    /// 构建处理器，初始化TTS和音频播放客户端
-    /// </summary>
-    /// <param name="privateProvider">私有提供者</param>
-    /// <returns>构建是否成功</returns>
-    public override bool Build(PrivateProvider privateProvider)
-    {
-        Session session = this.SendOutter.GetSession();
-        if (privateProvider.Tts is null)
+        private ITts? _tts;
+        private IAudioPlayerClient? _audioPlayerClient;
+
+        public Text2AudioHandler(ObjectPool<OutSegment> outSegmentPool,
+
+            ObjectPool<OutAudioSegment> outAudioSegmentPool,
+            ObjectPool<Workflow<OutAudioSegment>> outAudioSegmentWorkflowPool,
+            ObjectPool<Workflow<OutSegment>> outSegmentWorkflowPool,
+            XiaoZhiConfig config,
+            ILogger<Text2AudioHandler> logger) : base(config, logger)
         {
-            this.Logger.LogError(Lang.Text2AudioHandler_Build_TtsNotConfigured, session.DeviceId);
-            return false;
+            this._outSegmentPool = outSegmentPool;
+            this._outAudioSegmentPool = outAudioSegmentPool;
+            this._outAudioSegmentWorkflowPool = outAudioSegmentWorkflowPool;
+            this._outSegmentWorkflowPool = outSegmentWorkflowPool;
         }
 
-        if (privateProvider.AudioPlayerClient is null)
+        public override bool Build(PrivateProvider privateProvider)
         {
-            this.Logger.LogError(Lang.Text2AudioHandler_Build_PlayerNotConfigured, session.DeviceId);
-            return false;
+            Session session = this.SendOutter.GetSession();
+            if (privateProvider.Tts is null)
+            {
+                this.Logger.LogError(Lang.Text2AudioHandler_Build_TtsNotConfigured, session.DeviceId);
+                return false;
+            }
+
+            if (privateProvider.AudioPlayerClient is null)
+            {
+                this.Logger.LogError(Lang.Text2AudioHandler_Build_PlayerNotConfigured, session.DeviceId);
+                return false;
+            }
+
+            this._tts = privateProvider.Tts;
+            this._tts.RegisterDevice(session.DeviceId, session.SessionId, this);
+
+            this._audioPlayerClient = privateProvider.AudioPlayerClient;
+            this._audioPlayerClient.SystemNotification.OnAudioData += this.OnNotificationAudioDataAsync;
+            this._audioPlayerClient.MusicPlayer.OnAudioData += this.OnMusicAudioDataAsync;
+            this._audioPlayerClient.RegisterDevice(session.DeviceId, session.SessionId);
+            this.RegisterCancellationToken();
+
+            return true;
         }
 
-        this._tts = privateProvider.Tts;
-        this._tts.RegisterDevice(session.DeviceId, session.SessionId, this);
-
-        this._audioPlayerClient = privateProvider.AudioPlayerClient;
-        this._audioPlayerClient.SystemNotification.OnAudioData += this.OnNotificationAudioDataAsync;
-        this._audioPlayerClient.MusicPlayer.OnAudioData += this.OnMusicAudioDataAsync;
-        this._audioPlayerClient.RegisterDevice(session.DeviceId, session.SessionId);
-        this.RegisterCancellationToken();
-
-        return true;
-    }
-
-    /// <summary>
-    /// 处理处理器令牌变更事件，停止音频播放
-    /// </summary>
-    protected override async void OnHandlerTokenChanged()
-    {
-        if (this._audioPlayerClient is not null)
+        protected override async void OnHandlerTokenChanged()
         {
-            await this._audioPlayerClient.SystemNotification.StopAsync();
-            await this._audioPlayerClient.MusicPlayer.StopAsync();
+            if (this._audioPlayerClient is not null)
+            {
+                await this._audioPlayerClient.SystemNotification.StopAsync();
+                await this._audioPlayerClient.MusicPlayer.StopAsync();
+            }
         }
-    }
 
-    /// <summary>
-    /// 获取处理器名称
-    /// </summary>
-    public override string HandlerName => nameof(Text2AudioHandler);
-    
-    /// <summary>
-    /// 前一个处理器的读取器
-    /// </summary>
-    public ChannelReader<Workflow<OutSegment>> PreviousReader { get; set; } = null!;
-    
-    /// <summary>
-    /// 下一个处理器的写入器（TTS音频）
-    /// </summary>
-    public ChannelWriter<Workflow<OutAudioSegment>> NextWriter { get; set; } = null!;
-    
-    /// <summary>
-    /// 第二个下一个处理器的写入器（音乐音频）
-    /// </summary>
-    public ChannelWriter<Workflow<OutAudioSegment>> NextWriter2 { get; set; } = null!;
-    
-    /// <summary>
-    /// 第三个下一个处理器的写入器（系统通知音频）
-    /// </summary>
-    public ChannelWriter<Workflow<OutAudioSegment>> NextWriter3 { get; set; } = null!;
+        public override string HandlerName => nameof(Text2AudioHandler);
+        public ChannelReader<Workflow<OutSegment>> PreviousReader { get; set; } = null!;
+        public ChannelWriter<Workflow<OutAudioSegment>> NextWriter { get; set; } = null!;
+        public ChannelWriter<Workflow<OutAudioSegment>> NextWriter2 { get; set; } = null!;
+        public ChannelWriter<Workflow<OutAudioSegment>> NextWriter3 { get; set; } = null!;
 
-    /// <summary>
-    /// 异步处理工作流数据
-    /// </summary>
-    /// <returns></returns>
-    public async Task Handle()
-    {
-        await foreach (var workflow in this.PreviousReader.ReadAllAsync())
+        public async Task Handle()
         {
+            await foreach (var workflow in this.PreviousReader.ReadAllAsync())
+            {
+                try
+                {
+                    await this.Handle(workflow);
+                }
+                finally
+                {
+                    this._outSegmentPool.Return(workflow.Data);
+                    this._outSegmentWorkflowPool.Return(workflow);
+                }
+            }
+        }
+
+        public async Task Handle(Workflow<OutSegment> workflow)
+        {
+            Session session = this.SendOutter.GetSession();
+            if (session is null || session.ShouldIgnore())
+            {
+                return;
+            }
+
+            if (!this.CheckWorkflowValid(workflow))
+            {
+                return;
+            }
+
+            if (this._tts is null)
+            {
+                this.Logger.LogError(Lang.Text2AudioHandler_Handle_TtsNotConfigured, session.DeviceId);
+                return;
+            }
+
+            if (!session.IsDeviceBinded)
+            {
+                session.PrivateProvider.AudioProcessor?.ClearAllBuffers();
+                await this.CheckBindDevice(session);
+                return;
+            }
+
             try
             {
-                await this.Handle(workflow);
+                if (string.IsNullOrEmpty(workflow.Data.Content))
+                {
+                    this.Logger.LogInformation(Lang.Text2AudioHandler_Handle_NoTtsRequired);
+                    return;
+                }
+                this.HandlerToken.ThrowIfCancellationRequested();
+                await this._tts.SynthesisAsync(workflow, this.HandlerToken);
             }
-            finally
+            catch (OperationCanceledException)
             {
-                this._outSegmentPool.Return(workflow.Data);
-                this._outSegmentWorkflowPool.Return(workflow);
+                this.Logger.LogDebug(Lang.Text2AudioHandler_Handle_Cancelled, session.DeviceId);
+            }
+            catch (Exception ex)
+            {
+                this.Logger.LogError(ex, Lang.Text2AudioHandler_Handle_ProcessFailed, session.DeviceId);
             }
         }
-    }
 
-    /// <summary>
-    /// 处理单个工作流
-    /// </summary>
-    /// <param name="workflow">要处理的工作流</param>
-    /// <returns></returns>
-    public async Task Handle(Workflow<OutSegment> workflow)
-    {
-        Session session = this.SendOutter.GetSession();
-        if (session is null || session.ShouldIgnore())
+        private async Task CheckBindDevice(Session session)
         {
-            return;
-        }
-
-        if (!this.CheckWorkflowValid(workflow))
-        {
-            return;
-        }
-
-        if (this._tts is null)
-        {
-            this.Logger.LogError(Lang.Text2AudioHandler_Handle_TtsNotConfigured, session.DeviceId);
-            return;
-        }
-
-        // 检查设备绑定状态
-        if (!session.IsDeviceBinded)
-        {
-            session.PrivateProvider.AudioProcessor?.ClearAllBuffers();
-            await this.CheckBindDevice(session);
-            return;
-        }
-
-        try
-        {
-            if (string.IsNullOrEmpty(workflow.Data.Content))
+            if (this._audioPlayerClient is null)
             {
-                this.Logger.LogInformation(Lang.Text2AudioHandler_Handle_NoTtsRequired);
-                return;
-            }
-            this.HandlerToken.ThrowIfCancellationRequested();
-            await this._tts.SynthesisAsync(workflow, this.HandlerToken);
-        }
-        catch (OperationCanceledException)
-        {
-            this.Logger.LogDebug(Lang.Text2AudioHandler_Handle_Cancelled, session.DeviceId);
-        }
-        catch (Exception ex)
-        {
-            this.Logger.LogError(ex, Lang.Text2AudioHandler_Handle_ProcessFailed, session.DeviceId);
-        }
-    }
-
-    /// <summary>
-    /// 检查设备绑定状态并执行绑定操作
-    /// </summary>
-    /// <param name="session">会话实例</param>
-    /// <returns></returns>
-    private async Task CheckBindDevice(Session session)
-    {
-        if (this._audioPlayerClient is null)
-        {
-            this.Logger.LogError(Lang.Text2AudioHandler_CheckBindDevice_PlayerNotBuilt, session.DeviceId);
-            return;
-        }
-
-        if (!string.IsNullOrEmpty(session.BindCode) && session.BindCode.Length == 6)
-        {
-            if (session.BindCode.Length != 6)
-            {
-                this.Logger.LogError(Lang.Text2AudioHandler_CheckBindDevice_InvalidBindCode, session.BindCode, session.DeviceId);
-                string bindErrorMsg = Lang.Text2AudioHandler_CheckBindDevice_BindCodeFormatError;
-                await session.SendOutter.SendSttMessageAsync(bindErrorMsg);
+                this.Logger.LogError(Lang.Text2AudioHandler_CheckBindDevice_PlayerNotBuilt, session.DeviceId);
                 return;
             }
 
-            string text = string.Format(Lang.Text2AudioHandler_CheckBindDevice_BindDevicePrompt, session.BindCode);
-            await session.SendOutter.SendSttMessageAsync(text);
-
-            await this._audioPlayerClient.SystemNotification.PlayBindCodeAsync(session.BindCode);
-        }
-        else
-        {
-            this.Logger.LogError(Lang.Text2AudioHandler_CheckBindDevice_InvalidBindCode, session.BindCode, session.DeviceId);
-            string text = Lang.Text2AudioHandler_CheckBindDevice_VersionNotFound;
-            await session.SendOutter.SendSttMessageAsync(text);
-
-            await this._audioPlayerClient.SystemNotification.PlayNotFoundAsync();
-        }
-    }
-
-    /// <summary>
-    /// 处理系统通知音频数据事件
-    /// </summary>
-    /// <param name="pcmData">PCM音频数据</param>
-    /// <param name="isFirst">是否为第一帧</param>
-    /// <param name="isLast">是否为最后一帧</param>
-    private async void OnNotificationAudioDataAsync(float[] pcmData, bool isFirst, bool isLast)
-    {
-        if (this.HandlerToken.IsCancellationRequested)
-        {
-            return;
-        }
-
-        Session session = this.SendOutter.GetSession();
-        if (session is null || session.ShouldIgnore())
-        {
-            return;
-        }
-
-        OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
-        Workflow<OutAudioSegment> workflow = this._outAudioSegmentWorkflowPool.Get();
-
-        outAudioSegment.Initialize(pcmData, AudioType.SystemNotification, isFirstFrame: isFirst, isLastFrame: isLast);
-        workflow.Initialize(session, outAudioSegment);
-
-        try
-        {
-            await this.NextWriter3.WriteAsync(workflow, this.HandlerToken);
-        }
-        catch (OperationCanceledException)
-        {
-            this._outAudioSegmentPool.Return(outAudioSegment);
-            this._outAudioSegmentWorkflowPool.Return(workflow);
-        }
-    }
-
-    /// <summary>
-    /// 处理音乐音频数据事件
-    /// </summary>
-    /// <param name="pcmData">PCM音频数据</param>
-    /// <param name="isFirst">是否为第一帧</param>
-    /// <param name="isLast">是否为最后一帧</param>
-    private async void OnMusicAudioDataAsync(float[] pcmData, bool isFirst, bool isLast)
-    {
-        if (this.HandlerToken.IsCancellationRequested)
-        {
-            return;
-        }
-
-        Session session = this.SendOutter.GetSession();
-        if (session is null || session.ShouldIgnore())
-        {
-            return;
-        }
-
-        OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
-        Workflow<OutAudioSegment> workflow = this._outAudioSegmentWorkflowPool.Get();
-
-        outAudioSegment.Initialize(pcmData, AudioType.Music, isFirstFrame: isFirst, isLastFrame: isLast);
-        workflow.Initialize(session, outAudioSegment);
-
-        try
-        {
-            await this.NextWriter2.WriteAsync(workflow, this.HandlerToken);
-        }
-        catch (OperationCanceledException)
-        {
-            this._outAudioSegmentPool.Return(outAudioSegment);
-            this._outAudioSegmentWorkflowPool.Return(workflow);
-        }
-    }
-
-    #region ITtsEventCallback
-    /// <summary>
-    /// 在处理前调用的回调方法
-    /// </summary>
-    /// <param name="sentence">句子内容</param>
-    /// <param name="isFirstSegment">是否为第一个段</param>
-    /// <param name="isLastSegment">是否为最后一个段</param>
-    public async void OnBeforeProcessing(string sentence, bool isFirstSegment, bool isLastSegment)
-    {
-        if (this.HandlerToken.IsCancellationRequested)
-        {
-            return;
-        }
-        Session session = this.SendOutter.GetSession();
-        if (session is null || session.ShouldIgnore())
-        {
-            return;
-        }
-        if (isFirstSegment)
-        {
-            OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
-            Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
-            outAudioSegment.Initialize(audioType: AudioType.TTS, content: sentence, isFirstSegment: isFirstSegment, isLastSegment: isLastSegment);
-
-            nextWorkflow.Initialize(session, outAudioSegment);
-            await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
-        }
-        this.Logger.LogDebug(Lang.Text2AudioHandler_OnBeforeProcessing_Started, session.DeviceId, sentence);
-    }
-
-    /// <summary>
-    /// 在处理过程中调用的回调方法
-    /// </summary>
-    /// <param name="audioData">音频数据</param>
-    /// <param name="isFirstFrame">是否为第一帧</param>
-    /// <param name="isLastFrame">是否为最后一帧</param>
-    public async void OnProcessing(float[] audioData, bool isFirstFrame, bool isLastFrame)
-    {
-        if (this.HandlerToken.IsCancellationRequested)
-        {
-            return;
-        }
-        Session session = this.SendOutter.GetSession();
-        if (session is null || session.ShouldIgnore())
-        {
-            return;
-        }
-
-        OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
-        Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
-
-        try
-        {
-            if (session.PrivateProvider.AudioResampler is not null && audioData.Length > 0)
+            if (!string.IsNullOrEmpty(session.BindCode) && session.BindCode.Length == 6)
             {
-                (float[] resampledAudioData, _) = await session.PrivateProvider.AudioResampler.ResampleAsync(audioData, this.HandlerToken);
-                outAudioSegment.Initialize(audioType: AudioType.TTS, audioData: resampledAudioData, isFirstFrame: isFirstFrame, isLastFrame: isLastFrame);
+                if (session.BindCode.Length != 6)
+                {
+                    this.Logger.LogError(Lang.Text2AudioHandler_CheckBindDevice_InvalidBindCode, session.BindCode, session.DeviceId);
+                    string bindErrorMsg = Lang.Text2AudioHandler_CheckBindDevice_BindCodeFormatError;
+                    await session.SendOutter.SendSttMessageAsync(bindErrorMsg);
+                    return;
+                }
+
+                string text = string.Format(Lang.Text2AudioHandler_CheckBindDevice_BindDevicePrompt, session.BindCode);
+                await session.SendOutter.SendSttMessageAsync(text);
+
+                await this._audioPlayerClient.SystemNotification.PlayBindCodeAsync(session.BindCode);
             }
             else
             {
-                outAudioSegment.Initialize(audioType: AudioType.TTS, audioData: audioData, isFirstFrame: isFirstFrame, isLastFrame: isLastFrame);
+                this.Logger.LogError(Lang.Text2AudioHandler_CheckBindDevice_InvalidBindCode, session.BindCode, session.DeviceId);
+                string text = Lang.Text2AudioHandler_CheckBindDevice_VersionNotFound;
+                await session.SendOutter.SendSttMessageAsync(text);
+
+                await this._audioPlayerClient.SystemNotification.PlayNotFoundAsync();
+            }
+        }
+
+        private async void OnNotificationAudioDataAsync(float[] pcmData, bool isFirst, bool isLast)
+        {
+            if (this.HandlerToken.IsCancellationRequested)
+            {
+                return;
             }
 
-            nextWorkflow.Initialize(session, outAudioSegment);
-            await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
-        }
-        catch (OperationCanceledException)
-        {
-            this._outAudioSegmentPool.Return(outAudioSegment);
-            this._outAudioSegmentWorkflowPool.Return(nextWorkflow);
-        }
-    }
+            Session session = this.SendOutter.GetSession();
+            if (session is null || session.ShouldIgnore())
+            {
+                return;
+            }
 
-    /// <summary>
-    /// 在处理完成后调用的回调方法
-    /// </summary>
-    /// <param name="sentence">句子内容</param>
-    /// <param name="isFirstSegment">是否为第一个段</param>
-    /// <param name="isLastSegment">是否为最后一个段</param>
-    /// <param name="ttsGenerateResult">TTS生成结果</param>
-    public async void OnProcessed(string sentence, bool isFirstSegment, bool isLastSegment, TtsGenerateResult ttsGenerateResult)
-    {
-        if (this.HandlerToken.IsCancellationRequested)
-        {
-            return;
-        }
-        Session session = this.SendOutter.GetSession();
-        if (session is null || session.ShouldIgnore())
-        {
-            return;
-        }
-        if (isLastSegment)
-        {
             OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
-            Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
+            Workflow<OutAudioSegment> workflow = this._outAudioSegmentWorkflowPool.Get();
+
+            outAudioSegment.Initialize(pcmData, AudioType.SystemNotification, isFirstFrame: isFirst, isLastFrame: isLast);
+            workflow.Initialize(session, outAudioSegment);
+
             try
             {
-                outAudioSegment.Initialize(audioType: AudioType.TTS, content: sentence, isFirstSegment: isFirstSegment, isLastSegment: isLastSegment);
-                nextWorkflow.Initialize(session, outAudioSegment);
+                await this.NextWriter3.WriteAsync(workflow, this.HandlerToken);
+            }
+            catch (OperationCanceledException)
+            {
+                this._outAudioSegmentPool.Return(outAudioSegment);
+                this._outAudioSegmentWorkflowPool.Return(workflow);
+            }
+        }
 
+        private async void OnMusicAudioDataAsync(float[] pcmData, bool isFirst, bool isLast)
+        {
+            if (this.HandlerToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            Session session = this.SendOutter.GetSession();
+            if (session is null || session.ShouldIgnore())
+            {
+                return;
+            }
+
+            OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
+            Workflow<OutAudioSegment> workflow = this._outAudioSegmentWorkflowPool.Get();
+
+            outAudioSegment.Initialize(pcmData, AudioType.Music, isFirstFrame: isFirst, isLastFrame: isLast);
+            workflow.Initialize(session, outAudioSegment);
+
+            try
+            {
+                await this.NextWriter2.WriteAsync(workflow, this.HandlerToken);
+            }
+            catch (OperationCanceledException)
+            {
+                this._outAudioSegmentPool.Return(outAudioSegment);
+                this._outAudioSegmentWorkflowPool.Return(workflow);
+            }
+        }
+
+        #region ITtsEventCallback
+        public async void OnBeforeProcessing(string sentence, bool isFirstSegment, bool isLastSegment)
+        {
+            if (this.HandlerToken.IsCancellationRequested)
+            {
+                return;
+            }
+            Session session = this.SendOutter.GetSession();
+            if (session is null || session.ShouldIgnore())
+            {
+                return;
+            }
+            if (isFirstSegment)
+            {
+                OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
+                Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
+                outAudioSegment.Initialize(audioType: AudioType.TTS, content: sentence, isFirstSegment: isFirstSegment, isLastSegment: isLastSegment);
+
+                nextWorkflow.Initialize(session, outAudioSegment);
+                await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
+            }
+            this.Logger.LogDebug(Lang.Text2AudioHandler_OnBeforeProcessing_Started, session.DeviceId, sentence);
+        }
+
+        public async void OnProcessing(float[] audioData, bool isFirstFrame, bool isLastFrame)
+        {
+            if (this.HandlerToken.IsCancellationRequested)
+            {
+                return;
+            }
+            Session session = this.SendOutter.GetSession();
+            if (session is null || session.ShouldIgnore())
+            {
+                return;
+            }
+
+            OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
+            Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
+
+            try
+            {
+                if (session.PrivateProvider.AudioResampler is not null && audioData.Length > 0)
+                {
+                    (float[] resampledAudioData, _) = await session.PrivateProvider.AudioResampler.ResampleAsync(audioData, this.HandlerToken);
+                    outAudioSegment.Initialize(audioType: AudioType.TTS, audioData: resampledAudioData, isFirstFrame: isFirstFrame, isLastFrame: isLastFrame);
+                }
+                else
+                {
+                    outAudioSegment.Initialize(audioType: AudioType.TTS, audioData: audioData, isFirstFrame: isFirstFrame, isLastFrame: isLastFrame);
+                }
+
+                nextWorkflow.Initialize(session, outAudioSegment);
                 await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
             }
             catch (OperationCanceledException)
@@ -429,97 +293,111 @@ internal class Text2AudioHandler : BaseHandler, IInHandler<OutSegment>, IOutHand
                 this._outAudioSegmentWorkflowPool.Return(nextWorkflow);
             }
         }
-        this.Logger.LogDebug(Lang.Text2AudioHandler_OnProcessed_Completed, session.DeviceId);
+
+        public async void OnProcessed(string sentence, bool isFirstSegment, bool isLastSegment, TtsGenerateResult ttsGenerateResult)
+        {
+            if (this.HandlerToken.IsCancellationRequested)
+            {
+                return;
+            }
+            Session session = this.SendOutter.GetSession();
+            if (session is null || session.ShouldIgnore())
+            {
+                return;
+            }
+            if (isLastSegment)
+            {
+                OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
+                Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
+                try
+                {
+                    outAudioSegment.Initialize(audioType: AudioType.TTS, content: sentence, isFirstSegment: isFirstSegment, isLastSegment: isLastSegment);
+                    nextWorkflow.Initialize(session, outAudioSegment);
+
+                    await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    this._outAudioSegmentPool.Return(outAudioSegment);
+                    this._outAudioSegmentWorkflowPool.Return(nextWorkflow);
+                }
+            }
+            this.Logger.LogDebug(Lang.Text2AudioHandler_OnProcessed_Completed, session.DeviceId);
+        }
+
+        public async void OnSentenceStart(string sentence, Emotion emotion, string sentenceId)
+        {
+            if (this.HandlerToken.IsCancellationRequested)
+            {
+                return;
+            }
+            Session session = this.SendOutter.GetSession();
+            if (session is null || session.ShouldIgnore())
+            {
+                return;
+            }
+            OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
+            Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
+            try
+            {
+                outAudioSegment.Initialize(audioType: AudioType.TTS, content: sentence, isFirstFrame: true, emotion: emotion, sentenceId: "S_" + sentenceId);
+
+                nextWorkflow.Initialize(session, outAudioSegment);
+                await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
+            }
+            catch (OperationCanceledException)
+            {
+                this._outAudioSegmentPool.Return(outAudioSegment);
+                this._outAudioSegmentWorkflowPool.Return(nextWorkflow);
+            }
+        }
+
+        public async void OnSentenceEnd(string sentence, Emotion emotion, string sentenceId)
+        {
+            if (this.HandlerToken.IsCancellationRequested)
+            {
+                return;
+            }
+            Session session = this.SendOutter.GetSession();
+            if (session is null || session.ShouldIgnore())
+            {
+                return;
+            }
+            OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
+            Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
+            try
+            {
+
+                outAudioSegment.Initialize(audioType: AudioType.TTS, content: sentence, isLastFrame: true, emotion: emotion, sentenceId: "E_" + sentenceId);
+
+                nextWorkflow.Initialize(session, outAudioSegment);
+                await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
+            }
+            catch (OperationCanceledException)
+            {
+                this._outAudioSegmentPool.Return(outAudioSegment);
+                this._outAudioSegmentWorkflowPool.Return(nextWorkflow);
+            }
+        }
+        #endregion
+
+        public override void Dispose()
+        {
+            Session session = this.SendOutter.GetSession();
+            if (session is null)
+            {
+                return;
+            }
+            this._tts?.UnregisterDevice(session.DeviceId, session.SessionId);
+            if (this._audioPlayerClient is not null)
+            {
+                this._audioPlayerClient.SystemNotification.OnAudioData -= this.OnNotificationAudioDataAsync;
+                this._audioPlayerClient.MusicPlayer.OnAudioData -= this.OnMusicAudioDataAsync;
+            }
+            this.NextWriter.Complete();
+            this.NextWriter2.Complete();
+            this.NextWriter3.Complete();
+            base.Dispose();
+        }
     }
-
-    /// <summary>
-    /// 句子开始时调用的回调方法
-    /// </summary>
-    /// <param name="sentence">句子内容</param>
-    /// <param name="emotion">情感类型</param>
-    /// <param name="sentenceId">句子ID</param>
-    public async void OnSentenceStart(string sentence, Emotion emotion, string sentenceId)
-    {
-        if (this.HandlerToken.IsCancellationRequested)
-        {
-            return;
-        }
-        Session session = this.SendOutter.GetSession();
-        if (session is null || session.ShouldIgnore())
-        {
-            return;
-        }
-        OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
-        Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
-        try
-        {
-            outAudioSegment.Initialize(audioType: AudioType.TTS, content: sentence, isFirstFrame: true, emotion: emotion, sentenceId: "S_" + sentenceId);
-
-            nextWorkflow.Initialize(session, outAudioSegment);
-            await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
-        }
-        catch (OperationCanceledException)
-        {
-            this._outAudioSegmentPool.Return(outAudioSegment);
-            this._outAudioSegmentWorkflowPool.Return(nextWorkflow);
-        }
-    }
-
-    /// <summary>
-    /// 句子结束时调用的回调方法
-    /// </summary>
-    /// <param name="sentence">句子内容</param>
-    /// <param name="emotion">情感类型</param>
-    /// <param name="sentenceId">句子ID</param>
-    public async void OnSentenceEnd(string sentence, Emotion emotion, string sentenceId)
-    {
-        if (this.HandlerToken.IsCancellationRequested)
-        {
-            return;
-        }
-        Session session = this.SendOutter.GetSession();
-        if (session is null || session.ShouldIgnore())
-        {
-            return;
-        }
-        OutAudioSegment outAudioSegment = this._outAudioSegmentPool.Get();
-        Workflow<OutAudioSegment> nextWorkflow = this._outAudioSegmentWorkflowPool.Get();
-        try
-        {
-
-            outAudioSegment.Initialize(audioType: AudioType.TTS, content: sentence, isLastFrame: true, emotion: emotion, sentenceId: "E_" + sentenceId);
-
-            nextWorkflow.Initialize(session, outAudioSegment);
-            await this.NextWriter.WriteAsync(nextWorkflow, this.HandlerToken);
-        }
-        catch (OperationCanceledException)
-        {
-            this._outAudioSegmentPool.Return(outAudioSegment);
-            this._outAudioSegmentWorkflowPool.Return(nextWorkflow);
-        }
-    }
-    #endregion
-
-    /// <summary>
-    /// 释放资源，注销设备注册
-    /// </summary>
-    public override void Dispose()
-    {
-        Session session = this.SendOutter.GetSession();
-        if (session is null)
-        {
-            return;
-        }
-        this._tts?.UnregisterDevice(session.DeviceId, session.SessionId);
-        if (this._audioPlayerClient is not null)
-        {
-            this._audioPlayerClient.SystemNotification.OnAudioData -= this.OnNotificationAudioDataAsync;
-            this._audioPlayerClient.MusicPlayer.OnAudioData -= this.OnMusicAudioDataAsync;
-        }
-        this.NextWriter.Complete();
-        this.NextWriter2.Complete();
-        this.NextWriter3.Complete();
-        base.Dispose();
-    }
-}
 }

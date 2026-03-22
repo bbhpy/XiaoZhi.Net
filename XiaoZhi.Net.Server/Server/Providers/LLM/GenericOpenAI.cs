@@ -156,38 +156,49 @@ namespace XiaoZhi.Net.Server.Providers.LLM
             List<OutSegment> allResponse = new List<OutSegment>();
             try
             {
-                // 记录当前内核中的插件信息
-                if (this._kernel != null)
-                {
-                    var plugins = this._kernel.Plugins?.ToList() ?? new List<KernelPlugin>();
-                    foreach (var plugin in plugins)
-                    {
-                        var functions = plugin.ToList();
-                        this.Logger.LogDebug("内核中已加载插件: {PluginName} (包含 {FunctionCount} 个函数)",
-                            plugin.Name, functions.Count);
-                    }
-                }
-
                 this.OnBeforeTokenGenerate?.Invoke();
-
 
                 string assistantResponse = await this._chatAgent.GenerateChatResponseAsync(userMessage, token);
                 token.ThrowIfCancellationRequested();
 
-
-                // ✅ 检查响应是否可能包含函数调用结果
-                if (assistantResponse.Contains("播放") || assistantResponse.Contains("音乐"))
-                {
-                    this.Logger.LogDebug("检测到可能与音乐播放相关的响应");
-                }
+                // ✅ 添加日志，查看原始响应
+                this.Logger.LogDebug("LLM原始响应: {Response}", assistantResponse);
 
                 string cleanContent = DialogueHelper.GetStringNoPunctuationOrEmoji(assistantResponse);
+
+                // ✅ 添加日志，查看清理后的内容
+                this.Logger.LogDebug("清理后内容: {CleanContent}", cleanContent);
+
                 IEnumerable<string> segments = DialogueHelper.SplitContentByPunctuations(cleanContent);
 
+                // ✅ 关键修改：去重，并记录重复
+                var uniqueSegments = new List<string>();
+                var seenSegments = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (var segment in segments)
+                {
+                    if (string.IsNullOrWhiteSpace(segment))
+                        continue;
+
+                    if (!seenSegments.Contains(segment))
+                    {
+                        seenSegments.Add(segment);
+                        uniqueSegments.Add(segment);
+                    }
+                    else
+                    {
+                        this.Logger.LogWarning("检测到重复的句子: '{Segment}'，已跳过", segment);
+                    }
+                }
+
+                // ✅ 日志：去重后的结果
+                this.Logger.LogDebug("去重后句子: {Segments}", string.Join(" | ", uniqueSegments));
+
                 int index = 0;
-                int count = segments.Count();
+                int count = uniqueSegments.Count;
                 string paragraphId = this.GenerateId();
-                foreach (string sentence in segments)
+
+                foreach (string sentence in uniqueSegments)
                 {
                     token.ThrowIfCancellationRequested();
                     index++;
@@ -206,14 +217,12 @@ namespace XiaoZhi.Net.Server.Providers.LLM
             catch (OperationCanceledException)
             {
                 this.Logger.LogDebug(Lang.GenericOpenAI_ChatAsync_Cancelled, allResponse.Count);
-                // Clean up any segments that were created but not yet sent
                 this.OnTokenGenerated?.Invoke(allResponse);
                 throw;
             }
             catch (Exception ex)
             {
                 this.Logger.LogError(ex, Lang.GenericOpenAI_ChatAsync_UnexpectedError, this.ProviderType);
-                // Clean up segments on error
                 this.OnTokenGenerated?.Invoke(allResponse);
             }
         }

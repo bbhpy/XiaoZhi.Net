@@ -8,17 +8,68 @@ using XiaoZhi.Net.Server.Store;
 namespace XiaoZhi.Net.Server.Server.Providers.MCP
 {
     /// <summary>
-    /// MCP服务存储类，用于管理设备与服务之间的绑定关系
+    /// MCP服务存储类 - 纯数据存储
+    /// 负责持久化设备与服务之间的绑定关系
     /// </summary>
     internal class McpServiceStore : DefaultMemoryStore
     {
+        // 存储键格式: "binding:{deviceToken}:{serviceId}"
+        private const string KEY_PREFIX = "binding:";
+
         /// <summary>
-        /// 根据设备令牌获取该设备绑定的所有服务
+        /// 生成存储键
         /// </summary>
-        public List<ServiceBinding> GetServicesByDevice(string deviceToken)
+        private static string GetKey(string deviceToken, string serviceId)
+        {
+            return $"{KEY_PREFIX}{deviceToken}:{serviceId}";
+        }
+
+        /// <summary>
+        /// 保存或更新服务绑定
+        /// </summary>
+        public bool SaveBinding(ServiceBinding binding)
+        {
+            if (binding == null)
+                return false;
+
+            var key = GetKey(binding.DeviceToken, binding.ServiceId);
+            binding.LastUpdatedAt = DateTime.UtcNow;
+
+            if (Contains(key))
+            {
+                return Update(key, binding);
+            }
+            else
+            {
+                return Add(key, binding);
+            }
+        }
+
+        /// <summary>
+        /// 获取指定设备和服务的绑定
+        /// </summary>
+        public ServiceBinding? GetBinding(string deviceToken, string serviceId)
+        {
+            var key = GetKey(deviceToken, serviceId);
+            return SafeGetBinding(key);
+        }
+
+        /// <summary>
+        /// 删除指定设备和服务的绑定
+        /// </summary>
+        public int DeleteBinding(string deviceToken, string serviceId)
+        {
+            var key = GetKey(deviceToken, serviceId);
+            return Remove(key);
+        }
+
+        /// <summary>
+        /// 获取设备的所有绑定
+        /// </summary>
+        public List<ServiceBinding> GetBindingsByDevice(string deviceToken)
         {
             var result = new List<ServiceBinding>();
-            var allBindings = this.GetAll<ServiceBinding>();
+            var allBindings = GetAll<ServiceBinding>();
 
             foreach (var binding in allBindings.Values)
             {
@@ -31,12 +82,49 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP
         }
 
         /// <summary>
-        /// 根据服务ID获取使用该服务的所有设备
+        /// 获取设备的所有工具定义
         /// </summary>
-        public List<ServiceBinding> GetDevicesByService(string serviceId)
+        public List<ToolDefinition> GetAllToolsByDevice(string deviceToken)
+        {
+            var bindings = GetBindingsByDevice(deviceToken);
+            return bindings
+                .Where(b => b.Tools != null)
+                .SelectMany(b => b.Tools!)
+                .ToList();
+        }
+
+        /// <summary>
+        /// 获取设备指定服务的工具定义
+        /// </summary>
+        public List<ToolDefinition> GetToolsByService(string deviceToken, string serviceId)
+        {
+            var binding = GetBinding(deviceToken, serviceId);
+            return binding?.Tools ?? new List<ToolDefinition>();
+        }
+
+        /// <summary>
+        /// 更新工具列表
+        /// </summary>
+        public bool UpdateTools(string deviceToken, string serviceId, List<ToolDefinition> tools)
+        {
+            var binding = GetBinding(deviceToken, serviceId);
+            if (binding == null)
+                return false;
+
+            binding.Tools = tools;
+            binding.LastToolsUpdateAt = DateTime.UtcNow;
+            binding.LastUpdatedAt = DateTime.UtcNow;
+
+            return SaveBinding(binding);
+        }
+
+        /// <summary>
+        /// 获取所有绑定了指定设备的服务（用于反向查询）
+        /// </summary>
+        public List<ServiceBinding> GetBindingsByService(string serviceId)
         {
             var result = new List<ServiceBinding>();
-            var allBindings = this.GetAll<ServiceBinding>();
+            var allBindings = GetAll<ServiceBinding>();
 
             foreach (var binding in allBindings.Values)
             {
@@ -49,47 +137,12 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP
         }
 
         /// <summary>
-        /// 更新设备服务绑定的工具列表
+        /// 获取所有在线服务的绑定（有活跃连接的）
         /// </summary>
-        public bool UpdateTools(string deviceToken, string serviceId, List<ToolDefinition> tools)
-        {
-            var key = $"binding:{deviceToken}:{serviceId}";
-            var binding = this.SafeGetBinding(key);
-
-            if (binding != null)
-            {
-                binding.Tools = tools;
-                binding.LastToolsUpdateAt = DateTime.UtcNow;
-                return this.Update(key, binding);
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// 更新设备服务绑定的连接状态
-        /// </summary>
-        public bool UpdateConnectionStatus(string deviceToken, string serviceId,
-            string connectionId, bool isConnected)
-        {
-            var key = $"binding:{deviceToken}:{serviceId}";
-            var binding = this.SafeGetBinding(key);
-
-            if (binding != null)
-            {
-                binding.CurrentConnectionId = isConnected ? connectionId : null;
-                binding.LastConnectedAt = DateTime.UtcNow;
-                return this.Update(key, binding);
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// 获取所有在线服务
-        /// </summary>
-        public List<ServiceBinding> GetOnlineServices()
+        public List<ServiceBinding> GetOnlineServiceBindings()
         {
             var result = new List<ServiceBinding>();
-            var allBindings = this.GetAll<ServiceBinding>();
+            var allBindings = GetAll<ServiceBinding>();
 
             foreach (var binding in allBindings.Values)
             {
@@ -102,39 +155,24 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP
         }
 
         /// <summary>
-        /// 从数据库批量加载服务绑定数据
-        /// </summary>
-        public void LoadFromDatabase(List<ServiceBinding> bindings)
-        {
-            foreach (var binding in bindings)
-            {
-                var key = $"binding:{binding.DeviceToken}:{binding.ServiceId}";
-                this.Add(key, binding);
-            }
-        }
-
-        /// <summary>
         /// 安全获取绑定
         /// </summary>
         public ServiceBinding? SafeGetBinding(string deviceToken, string serviceId)
         {
-            var key = $"binding:{deviceToken}:{serviceId}";
-            return SafeGetBinding(key);
+            return GetBinding(deviceToken, serviceId);
         }
 
         /// <summary>
-        /// 安全获取绑定
+        /// 安全获取绑定（通过键）
         /// </summary>
         public ServiceBinding? SafeGetBinding(string key)
         {
-            if (!this.Contains(key))
-            {
+            if (!Contains(key))
                 return null;
-            }
 
             try
             {
-                return this.Get<ServiceBinding>(key);
+                return Get<ServiceBinding>(key);
             }
             catch
             {
@@ -143,39 +181,15 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP
         }
 
         /// <summary>
-        /// 根据设备Token获取所有工具名称（快速索引用）
+        /// 批量加载绑定数据
         /// </summary>
-        public List<string> GetAllToolNamesByDevice(string deviceToken)
+        public void LoadBindings(List<ServiceBinding> bindings)
         {
-            var services = GetServicesByDevice(deviceToken);
-            return services.SelectMany(s => s.Tools?.Select(t => t.Name) ?? new List<string>()).ToList();
-        }
-
-        /// <summary>
-        /// 根据设备Token获取所有工具的完整定义
-        /// </summary>
-        public List<ToolDefinition> GetAllToolsByDevice(string deviceToken)
-        {
-            var services = GetServicesByDevice(deviceToken);
-            return services.SelectMany(s => s.Tools ?? new List<ToolDefinition>()).ToList();
-        }
-
-        /// <summary>
-        /// 检查工具是否属于指定设备
-        /// </summary>
-        public bool IsToolBelongToDevice(string deviceToken, string toolName)
-        {
-            var services = GetServicesByDevice(deviceToken);
-            return services.Any(s => s.Tools?.Any(t => t.Name == toolName) == true);
-        }
-
-        /// <summary>
-        /// 根据工具名查找对应的服务绑定
-        /// </summary>
-        public ServiceBinding? FindBindingByToolName(string deviceToken, string toolName)
-        {
-            var services = GetServicesByDevice(deviceToken);
-            return services.FirstOrDefault(s => s.Tools?.Any(t => t.Name == toolName) == true);
+            foreach (var binding in bindings)
+            {
+                var key = GetKey(binding.DeviceToken, binding.ServiceId);
+                Add(key, binding);
+            }
         }
     }
 
@@ -202,7 +216,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP
         /// <summary>
         /// 工具列表（完整定义）
         /// </summary>
-        public List<ToolDefinition> Tools { get; set; }
+        public List<ToolDefinition>? Tools { get; set; }
 
         /// <summary>
         /// 首次连接时间
@@ -218,6 +232,11 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP
         /// 最后工具更新时间
         /// </summary>
         public DateTime LastToolsUpdateAt { get; set; }
+
+        /// <summary>
+        /// 最后更新时间
+        /// </summary>
+        public DateTime LastUpdatedAt { get; set; }
 
         /// <summary>
         /// 当前连接ID，为空表示离线

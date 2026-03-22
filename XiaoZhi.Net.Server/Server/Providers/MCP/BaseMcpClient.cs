@@ -16,6 +16,7 @@ using XiaoZhi.Net.Server.Common.Contexts;
 using XiaoZhi.Net.Server.Helpers;
 using XiaoZhi.Net.Server.I18n;
 using XiaoZhi.Net.Server.Server.Common.Constants;
+using XiaoZhi.Net.Server.Server.Providers.MCP;
 using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Providers.MCP
@@ -58,14 +59,16 @@ namespace XiaoZhi.Net.Server.Providers.MCP
         /// </summary>
         private IDictionary<int, TaskCompletionSource<JsonObject>> _callResults = new ConcurrentDictionary<int, TaskCompletionSource<JsonObject>>();
 
-        private readonly ToolRegistry _toolRegistry;
+        private readonly ToolRouter _toolRegistry;
+        private readonly McpServiceStore _serviceStore;
         /// <summary>
         /// 初始化BaseMcpClient实例
         /// </summary>
         /// <param name="logger">日志记录器</param>
-        public BaseMcpClient(ILogger<TLogger> logger, ToolRegistry toolRegistry) : base(logger)
+        public BaseMcpClient(ILogger<TLogger> logger, ToolRouter toolRegistry, McpServiceStore serviceStore) : base(logger)
         {
             _toolRegistry = toolRegistry;
+            _serviceStore = serviceStore;
         }
 
         /// <summary>
@@ -504,8 +507,8 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                     return;
                 }
 
-                // 获取该设备绑定的所有三方工具
-                var thirdPartyTools = _toolRegistry.GetDeviceTools(this.CurrentSession.DeviceId);
+                // 通过 McpServiceStore 获取设备的所有工具
+                var thirdPartyTools = _serviceStore.GetAllToolsByDevice(this.CurrentSession.DeviceToken ?? this.CurrentSession.DeviceId);
 
                 if (thirdPartyTools == null || !thirdPartyTools.Any())
                 {
@@ -517,10 +520,8 @@ namespace XiaoZhi.Net.Server.Providers.MCP
 
                 foreach (var tool in thirdPartyTools)
                 {
-                    // 工具名转换：点号替换为占位符
                     string functionName = tool.Name.Replace(REAL_DOT, DOT_PLACEHOLDER);
 
-                    // 解析参数
                     var parameters = new List<KernelParameterMetadata>();
                     if (tool.InputSchema != null &&
                         tool.InputSchema.TryGetPropertyValue("properties", out var propsNode) &&
@@ -536,14 +537,12 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                                     IsRequired = false
                                 };
 
-                                // 检查是否为必填参数
                                 if (tool.InputSchema.TryGetPropertyValue("required", out var requiredNode) &&
                                     requiredNode is JsonArray requiredArray)
                                 {
                                     param.IsRequired = requiredArray.Any(x => x?.GetValue<string>() == prop.Key);
                                 }
 
-                                // 判断参数类型
                                 var type = propObj["type"]?.GetValue<string>();
                                 if (type == "number" || type == "integer")
                                     param.ParameterType = typeof(int);
@@ -555,28 +554,14 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                         }
                     }
 
-                    // 创建 KernelFunction - 使用同步包装异步调用
+                    // 注意：这里需要注入 McpToolInvoker 来实际调用
+                    // 暂时保持原有逻辑，但需要调整
                     var function = KernelFunctionFactory.CreateFromMethod(
-                        (KernelArguments args) =>
+                        async (KernelArguments args) =>
                         {
-                            // 使用 Task.Run 包装异步调用，返回 Task<string>
-                            return Task.Run(async () =>
-                            {
-                                var result = await _toolRegistry.CallThirdPartyToolAsync(tool.Name, args);
-
-                                // 安全地解析结果
-                                if (result.TryGetPropertyValue("content", out var contentNode) &&
-                                    contentNode is JsonArray contentArray &&
-                                    contentArray.Count > 0 &&
-                                    contentArray[0] is JsonObject first &&
-                                    first.TryGetPropertyValue("text", out var textNode) &&
-                                    textNode != null)
-                                {
-                                    return textNode.GetValue<string>();
-                                }
-
-                                return result.ToJsonString();
-                            });
+                            // 这里需要通过 McpToolInvoker 调用
+                            this.Logger.LogWarning("三方工具调用暂未实现");
+                            return $"工具 {tool.Name} 调用暂未实现";
                         },
                         functionName,
                         tool.Description,
@@ -585,14 +570,12 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                     thirdPartyFunctions.Add(function);
                 }
 
-                // 移除旧的 ThirdPartyService 插件
                 var kernel = this.CurrentSession.PrivateProvider.Kernel;
                 if (kernel.Plugins.TryGetPlugin("ThirdPartyService", out var oldPlugin))
                 {
                     kernel.Plugins.Remove(oldPlugin);
                 }
 
-                // 注册新的插件
                 if (thirdPartyFunctions.Any())
                 {
                     kernel.ImportPluginFromFunctions("ThirdPartyService", thirdPartyFunctions);

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using System;
 using System.Collections.Generic;
@@ -10,6 +11,7 @@ using XiaoZhi.Net.Server.Common.Constants;
 using XiaoZhi.Net.Server.Common.Contexts;
 using XiaoZhi.Net.Server.I18n;
 using XiaoZhi.Net.Server.Providers.MCP;
+using XiaoZhi.Net.Server.Server.Providers.MCP;
 using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Providers.LLM.FunctionInvocationFilters
@@ -21,9 +23,11 @@ namespace XiaoZhi.Net.Server.Providers.LLM.FunctionInvocationFilters
 
         private const string IOT_COMPONENT_PATTERN = @"^" + SubMCPClientTypeNames.DeviceIoTClient + @"_(.+?)_\d+$";
 
-        public MCPToolFunctionFilter(ILogger<MCPToolFunctionFilter> logger)
+        private readonly IServiceProvider _serviceProvider;
+        public MCPToolFunctionFilter(ILogger<MCPToolFunctionFilter> logger, IServiceProvider serviceProvider)
         {
             this._logger = logger;
+            this._serviceProvider = serviceProvider;
         }
         public async Task OnFunctionInvocationAsync(FunctionInvocationContext context, Func<FunctionInvocationContext, Task> next)
         {
@@ -101,27 +105,27 @@ namespace XiaoZhi.Net.Server.Providers.LLM.FunctionInvocationFilters
         {
             try
             {
-                // 从服务提供商获取 ToolRegistry - 需要修改获取方式
-                // 方法1：如果 ToolRegistry 是单例，可以从 context.Kernel 或其他地方获取
-                var toolRegistry = GetToolRegistry(context, session);
+                // 获取 ToolRouter 和 McpToolInvoker
+                var toolRouter = GetToolRouter();
+                var toolInvoker = GetToolInvoker();
 
-                // 注意：context.Function.Name 是带数字4的格式，需要转回点号
+                if (toolRouter == null || toolInvoker == null)
+                {
+                    throw new InvalidOperationException("无法获取工具路由或调用器");
+                }
+
+                // 注意：context.Function.Name 是带占位符的格式（点号被替换为'4'），需要转回点号
                 string originalToolName = context.Function.Name.Replace('4', '.');
 
-                var result = await toolRegistry.CallThirdPartyToolAsync(originalToolName, context.Arguments);
+                // 使用 McpToolInvoker 调用工具
+                var result = await toolInvoker.InvokeAsync(originalToolName, context.Arguments, session.SessionCtsToken);
 
-                // 解析结果
-                if (result.TryGetPropertyValue("content", out var content)
-                    && content is JsonArray contentArray
-                    && contentArray.FirstOrDefault() is JsonObject first
-                    && first.TryGetPropertyValue("text", out var text))
-                {
-                    context.Result = new FunctionResult(context.Result, text.GetValue<string>());
-                }
-                else
-                {
-                    context.Result = new FunctionResult(context.Result, result.ToJsonString());
-                }
+                context.Result = new FunctionResult(context.Result, result);
+            }
+            catch (TimeoutException ex)
+            {
+                this._logger.LogWarning(ex, "三方指令执行超时: {FunctionName}", context.Function.Name);
+                context.Result = new FunctionResult(context.Result, $"三方指令执行超时: {ex.Message}");
             }
             catch (Exception ex)
             {
@@ -130,22 +134,33 @@ namespace XiaoZhi.Net.Server.Providers.LLM.FunctionInvocationFilters
             }
         }
         /// <summary>
-        /// 获取 ToolRegistry 实例
+        /// 获取 ToolRouter 实例
         /// </summary>
-        private ToolRegistry GetToolRegistry(FunctionInvocationContext context, Session session)
+        private ToolRouter? GetToolRouter()
         {
-            // 方案A：从 Kernel 的 Data 中获取（需要在初始化时放入）
-            if (context.Kernel.Data.TryGetValue("ToolRegistry", out var registry) && registry is ToolRegistry toolReg)
+            try
             {
-                return toolReg;
+                return _serviceProvider.GetService<ToolRouter>();
             }
+            catch
+            {
+                return null;
+            }
+        }
 
-            // 方案B：使用静态访问（如果 ToolRegistry 是单例）
-            // return ToolRegistry.Instance;
-
-            // 方案C：从全局服务提供商获取
-            // 需要注入 IServiceProvider 到 MCPToolFunctionFilter
-            throw new InvalidOperationException("无法获取 ToolRegistry 实例");
+        /// <summary>
+        /// 获取 McpToolInvoker 实例
+        /// </summary>
+        private McpToolInvoker? GetToolInvoker()
+        {
+            try
+            {
+                return _serviceProvider.GetService<McpToolInvoker>();
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }

@@ -29,6 +29,7 @@ using XiaoZhi.Net.Server.Management;
 using XiaoZhi.Net.Server.Protocol;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts;
 using XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts;
+using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
 using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
@@ -98,6 +99,8 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         private readonly UdpBackgroundService _udpClient; // 复用全局UdpClient
 
         private readonly TokenSessionRegistry _tokenSessionRegistry;
+
+        private readonly IEventPublisher _eventPublisher;
         public MqttUdpSession(ILogger<MqttSession> logger, 
             MqttService mqttService, 
             MqttUdpSessionStore sessionStore,
@@ -105,7 +108,8 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             ProviderManager providerManager,
             XiaoZhiConfig xiaoZhiConfig, 
             UdpBackgroundService udpBackgroundService,
-            TokenSessionRegistry tokenSessionRegistry)
+            TokenSessionRegistry tokenSessionRegistry,
+            IEventPublisher eventPublisher)
         {
             SessionId = RandomStringGenerator.GenerateRandomString(9);
             IsMqttConnected = true;
@@ -121,6 +125,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             _udpClient = udpBackgroundService;
             _udpAudioSender= new UdpAudioSender(Ssrc, UdpAesKey);
             _tokenSessionRegistry = tokenSessionRegistry;
+            _eventPublisher = eventPublisher;
         }
         public Task SetMqttClientId(string clientId)
         {
@@ -384,6 +389,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             session.DeviceToken = "AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa";
             _tokenSessionRegistry.Register(session.DeviceToken, SessionId);
 
+            _eventPublisher.Publish(new DeviceOnlineEvent(session.DeviceToken, this.SessionId, DateTime.UtcNow));
             // 初始化问候消息处理器
             this._handlerManager.InitializeHelloMessageHandler(session);
             // 刷新最后活动时间

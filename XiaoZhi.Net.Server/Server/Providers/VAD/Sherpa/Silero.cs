@@ -34,9 +34,9 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Sherpa
                 // 语音阈值，范围为0到1，默认值为0.5
                 vadModelConfig.SileroVad.Threshold = modelSetting.Config.GetConfigValueOrDefault("Threshold", 0.5f);
                 // 设置静音阈值和语音持续时间的相关参数   静音阈值秒
-                vadModelConfig.SileroVad.MinSilenceDuration = modelSetting.Config.GetConfigValueOrDefault("SilenceThresholdSecond", 0.7f);
+                vadModelConfig.SileroVad.MinSilenceDuration = modelSetting.Config.GetConfigValueOrDefault("SilenceThresholdSecond", 1.5f);
                 // 最短语音持续时间（秒） 
-                vadModelConfig.SileroVad.MinSpeechDuration = modelSetting.Config.GetConfigValueOrDefault("MinSpeechDurationSecond", 0.5f);
+                vadModelConfig.SileroVad.MinSpeechDuration = modelSetting.Config.GetConfigValueOrDefault("MinSpeechDurationSecond", 0.7f);
                 //最大语音持续时间秒 
                 vadModelConfig.SileroVad.MaxSpeechDuration = modelSetting.Config.GetConfigValueOrDefault("MaxSpeechDurationSecond", 60.0f);
 

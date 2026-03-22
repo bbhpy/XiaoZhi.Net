@@ -88,7 +88,7 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Sherpa
                 return false;
             }
 
-            this._closeConnectionNoVoiceTime = modelSetting.Config.GetConfigValueOrDefault("CloseConnectionNoVoiceTime", 10_000);
+            this._closeConnectionNoVoiceTime = modelSetting.Config.GetConfigValueOrDefault("CloseConnectionNoVoiceTime", 120_000);
 
             vadModelConfig.SampleRate = this._sampleRate;
             this.FrameSize = this._sampleRate == SAMPLING_RATE_16K ? 512 : 256;

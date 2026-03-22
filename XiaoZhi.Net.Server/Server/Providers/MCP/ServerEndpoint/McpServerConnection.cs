@@ -10,31 +10,33 @@ using System.Threading;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Common.Contexts;
 using XiaoZhi.Net.Server.Server.Common.Constants;
+using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
 
 namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 {
     /// <summary>
     /// 管理单个三方MCP服务的连接（被动模式）
+    /// 职责：MCP握手、请求工具列表、保存绑定、发布事件
+    /// 不负责更新Kernel
     /// </summary>
     internal class McpServerConnection
     {
         private readonly WebSocket _webSocket;
         private readonly ILogger<McpServerConnection> _logger;
         private readonly McpServiceStore _serviceStore;
-        private readonly ToolRegistry _toolRegistry;
+        private readonly McpConnectionManager _connectionManager;
+        private readonly McpCallManager _callManager;
+        private readonly IEventPublisher _eventPublisher;
         private readonly string _deviceToken;
+        private readonly string _connectionId;
         private readonly CancellationTokenSource _cts = new();
 
-        // 服务标识（给程序用的，唯一）
+        // 服务标识
         private string? _serviceId = "pending";
-        // 服务名称（给人看的，显示用）
         private string? _serviceName = "待识别服务";
         private bool _toolsReceived;
 
-        // 等待响应的调用
-        private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonObject>> _pendingCalls = new();
-
-        public string ConnectionId { get; } = Guid.NewGuid().ToString("N");
+        public string ConnectionId => _connectionId;
         public string DeviceToken => _deviceToken;
         public string? ServiceId => _serviceId;
         public bool IsConnected => _webSocket.State == WebSocketState.Open;
@@ -43,14 +45,20 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             WebSocket webSocket,
             ILogger<McpServerConnection> logger,
             McpServiceStore serviceStore,
-            ToolRegistry toolRegistry,  // 新增
-            string deviceToken)
+            McpConnectionManager connectionManager,
+            McpCallManager callManager,
+            IEventPublisher eventPublisher,
+            string deviceToken,
+            string connectionId)
         {
             _webSocket = webSocket;
             _logger = logger;
             _serviceStore = serviceStore;
-            _toolRegistry = toolRegistry;
+            _connectionManager = connectionManager;
+            _callManager = callManager;
+            _eventPublisher = eventPublisher;
             _deviceToken = deviceToken;
+            _connectionId = connectionId;
         }
 
         /// <summary>
@@ -60,10 +68,12 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         {
             try
             {
+                // 创建临时绑定
                 await CreateTemporaryBindingAsync();
 
-                _logger.LogInformation("连接建立，立即检查是否有消息...");
+                _logger.LogInformation("连接建立，开始MCP握手，设备Token: {Token}", _deviceToken);
 
+                // 发送initialize请求并等待响应
                 await InitiateHandshakeAsync();
             }
             catch (Exception ex)
@@ -76,6 +86,9 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             }
         }
 
+        /// <summary>
+        /// 发起MCP握手
+        /// </summary>
         private async Task InitiateHandshakeAsync()
         {
             _logger.LogInformation("服务端主动发送 initialize 请求...");
@@ -91,14 +104,8 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     ["capabilities"] = new JsonObject
                     {
                         ["experimental"] = new JsonObject(),
-                        ["prompts"] = new JsonObject
-                        {
-                            ["listChanged"] = false
-                        },
-                        ["tools"] = new JsonObject
-                        {
-                            ["listChanged"] = false
-                        }
+                        ["prompts"] = new JsonObject { ["listChanged"] = false },
+                        ["tools"] = new JsonObject { ["listChanged"] = false }
                     },
                     ["clientInfo"] = new JsonObject
                     {
@@ -111,12 +118,11 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             await SendJsonAsync(initRequest);
             _logger.LogInformation("initialize已发送，等待响应...");
 
+            // 等待initialize响应
             var initResponse = await WaitForMessageAsync(1);
             _logger.LogInformation("收到 initialize 响应");
 
-            var capabilities = initResponse?["result"]?["capabilities"]?.AsObject();
-            _logger.LogInformation("HA capabilities: {Capabilities}", capabilities?.ToJsonString());
-
+            // 发送initialized通知
             var notif = new JsonObject
             {
                 ["jsonrpc"] = "2.0",
@@ -124,9 +130,13 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             };
             await SendJsonAsync(notif);
 
-            await Task.Delay(1000);
+            // 等待一小段时间确保服务端处理完成
+            await Task.Delay(500);
 
+            // 请求工具列表
             await RequestToolsListAsync();
+
+            // 进入消息循环
             await HandleMessagesAsync();
         }
 
@@ -143,7 +153,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             };
 
             await SendJsonAsync(request);
-            _logger.LogInformation("📋 已向设备Token: {Token} 请求工具列表", _deviceToken);
+            _logger.LogInformation("已向设备Token: {Token} 请求工具列表", _deviceToken);
         }
 
         /// <summary>
@@ -168,7 +178,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     }
 
                     var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    _logger.LogInformation("等待响应时收到消息: {Json}", json);
+                    _logger.LogDebug("等待响应时收到消息: {Json}", json);
 
                     var obj = JsonNode.Parse(json)?.AsObject();
                     if (obj == null) continue;
@@ -196,13 +206,11 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         /// </summary>
         private async Task CreateTemporaryBindingAsync()
         {
-            var bindingKey = $"binding:{_deviceToken}:pending";
+            var existingBinding = _serviceStore.GetBinding(_deviceToken, "pending");
 
-            var binding = _serviceStore.SafeGetBinding(bindingKey);
-
-            if (binding == null)
+            if (existingBinding == null)
             {
-                binding = new ServiceBinding
+                var binding = new ServiceBinding
                 {
                     DeviceToken = _deviceToken,
                     ServiceId = "pending",
@@ -210,36 +218,31 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     Tools = new List<ToolDefinition>(),
                     FirstConnectedAt = DateTime.UtcNow,
                     LastConnectedAt = DateTime.UtcNow,
-                    CurrentConnectionId = ConnectionId
+                    LastUpdatedAt = DateTime.UtcNow,
+                    CurrentConnectionId = _connectionId
                 };
 
-                if (_serviceStore.Add(bindingKey, binding))
+                if (_serviceStore.SaveBinding(binding))
                 {
-                    _logger.LogInformation("✅ 创建临时绑定成功，设备Token: {Token}", _deviceToken);
+                    _logger.LogInformation("创建临时绑定成功，设备Token: {Token}", _deviceToken);
                 }
                 else
                 {
-                    _logger.LogError("❌ 创建临时绑定失败，设备Token: {Token}", _deviceToken);
+                    _logger.LogError("创建临时绑定失败，设备Token: {Token}", _deviceToken);
                 }
             }
             else
             {
-                binding.LastConnectedAt = DateTime.UtcNow;
-                binding.CurrentConnectionId = ConnectionId;
-
-                if (_serviceStore.Update(bindingKey, binding))
-                {
-                    _logger.LogInformation("🔄 临时绑定更新成功，设备Token: {Token}", _deviceToken);
-                }
-                else
-                {
-                    _logger.LogError("❌ 临时绑定更新失败，设备Token: {Token}", _deviceToken);
-                }
+                existingBinding.LastConnectedAt = DateTime.UtcNow;
+                existingBinding.CurrentConnectionId = _connectionId;
+                existingBinding.LastUpdatedAt = DateTime.UtcNow;
+                _serviceStore.SaveBinding(existingBinding);
+                _logger.LogInformation("临时绑定更新成功，设备Token: {Token}", _deviceToken);
             }
         }
 
         /// <summary>
-        /// 处理后续消息
+        /// 处理后续消息循环
         /// </summary>
         private async Task HandleMessagesAsync()
         {
@@ -258,11 +261,8 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     }
 
                     var chunk = Encoding.UTF8.GetString(buffer, 0, result.Count);
-
-                    // 追加到缓冲区
                     messageBuffer.Append(chunk);
 
-                    // 检查消息是否完整（检查是否以 } 结尾且JSON格式正确）
                     if (result.EndOfMessage)
                     {
                         var completeMessage = messageBuffer.ToString();
@@ -286,11 +286,14 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             }
         }
 
+        /// <summary>
+        /// 处理单条消息
+        /// </summary>
         private async Task HandleMessageAsync(string json)
         {
             try
             {
-                _logger.LogInformation("📥 收到完整消息: {Json}", json);
+                _logger.LogDebug("收到完整消息: {Json}", json);
 
                 var obj = JsonNode.Parse(json)?.AsObject();
                 if (obj == null) return;
@@ -311,9 +314,8 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     // 处理工具调用响应
                     if (obj.TryGetPropertyValue("result", out var callResult))
                     {
-                        _logger.LogInformation("收到工具调用结果，ID: {Id}", id);
-                        // 通知等待调用的地方
-                        _toolRegistry.CompletePendingCall(id, obj);
+                        _logger.LogDebug("收到工具调用结果，ID: {Id}", id);
+                        _callManager.CompletePendingCall(id, obj);
                         return;
                     }
 
@@ -321,25 +323,30 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     if (obj.TryGetPropertyValue("error", out var errorNode))
                     {
                         _logger.LogError("收到错误响应，ID: {Id}, 错误: {Error}", id, errorNode.ToJsonString());
-                        _toolRegistry.CompletePendingCall(id, obj);
+                        _callManager.RejectPendingCall(id, errorNode["message"]?.GetValue<string>() ?? "未知错误");
                         return;
                     }
                 }
 
-                // 处理请求（有method的消息）
+                // 处理请求（有method的消息）- 三方服务主动调用工具（暂不支持）
                 if (obj.TryGetPropertyValue("method", out var methodNode))
                 {
                     var method = methodNode.GetValue<string>();
-                    _logger.LogInformation("收到请求: {Method}", method);
+                    _logger.LogDebug("收到请求: {Method}，暂不支持", method);
 
-                    if (method == "tools/call")
+                    // 返回不支持响应
+                    var errorResponse = new JsonObject
                     {
-                        await HandleToolCallAsync(obj);
-                        return;
-                    }
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = obj["id"]?.GetValue<int>(),
+                        ["error"] = new JsonObject
+                        {
+                            ["code"] = -32601,
+                            ["message"] = "Method not supported"
+                        }
+                    };
+                    await SendJsonAsync(errorResponse);
                 }
-
-                _logger.LogDebug("收到未处理的消息：{Json}", json);
             }
             catch (Exception ex)
             {
@@ -360,141 +367,92 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                 string? realServiceName = null;
 
                 // 从 server_info 获取服务标识
-                if (result.TryGetPropertyValue("server_info", out var serverInfo) &&
+                if (result.TryGetPropertyValue("serverInfo", out var serverInfo) &&
                     serverInfo is JsonObject serverObj)
                 {
                     realServiceId = serverObj["name"]?.GetValue<string>();
-                    realServiceName = serverObj["description"]?.GetValue<string>();
-                    _logger.LogInformation("从 server_info 获取到服务标识: {ServiceId}", realServiceId);
+                    realServiceName = serverObj["description"]?.GetValue<string>() ?? serverObj["name"]?.GetValue<string>();
+                    _logger.LogInformation("从 serverInfo 获取到服务标识: {ServiceId}", realServiceId);
                 }
 
                 // 解析工具列表
+                var tools = new List<ToolDefinition>();
                 if (result.TryGetPropertyValue("tools", out var toolsNode) &&
                     toolsNode is JsonArray toolsArray)
                 {
-                    var tools = new List<ToolDefinition>();
-
                     foreach (var tool in toolsArray)
                     {
                         if (tool is JsonObject toolObj)
                         {
                             var toolDef = ToolDefinition.FromJson(toolObj);
-
-                            if (!StaticDeputy.IsValidToolName(toolDef.Name))
+                            if (!string.IsNullOrEmpty(toolDef.Name))
                             {
-                                this._logger.LogWarning("工具名称 {ToolName} 包含非法字符，已跳过", toolDef.Name);
-                                continue;
+                                tools.Add(toolDef);
+                                _logger.LogDebug("   - 工具：{ToolName}，描述：{Description}",
+                                    toolDef.Name, toolDef.Description ?? "无描述");
                             }
-
-                            tools.Add(toolDef);
-
-                            _logger.LogDebug("   - 工具：{ToolName}，描述：{Description}",
-                                toolDef.Name, toolDef.Description ?? "无描述");
-
-                            // ⭐ 注册工具到全局索引（只注册名称用于快速路由）
-                            // 注意：这里会触发 ThirdPartyToolRegistrar 注册到 Kernel
-                            _toolRegistry.RegisterTool(toolDef.Name, _deviceToken, _serviceId ?? "unknown");
                         }
                     }
-
-                    // 确定服务ID
-                    if (string.IsNullOrEmpty(realServiceId))
-                    {
-                        realServiceId = tools.Count > 0 ? tools[0].Name.Split('.').FirstOrDefault() ?? "unknown" : "unknown";
-                        realServiceName = $"{realServiceId}服务";
-                    }
-
-                    // 更新服务标识
-                    _serviceId = realServiceId;
-                    _serviceName = realServiceName;
-
-                    // 更新绑定信息
-                    var tempKey = $"binding:{_deviceToken}:pending";
-                    var newKey = $"binding:{_deviceToken}:{_serviceId}";
-
-                    var binding = _serviceStore.Get<ServiceBinding>(tempKey);
-                    if (binding != null)
-                    {
-                        _serviceStore.Remove(tempKey);
-
-                        binding.ServiceId = _serviceId;
-                        binding.ServiceName = _serviceName ?? _serviceId;
-                        binding.Tools = tools;  // 存储完整工具定义
-                        _serviceStore.Add(newKey, binding);
-
-                        // 注册连接
-                        _toolRegistry.RegisterConnection(_deviceToken, _serviceId, _webSocket, ConnectionId);
-
-                        _logger.LogInformation("✅ 服务识别完成：{ServiceId}({ServiceName})，注册了 {ToolCount} 个工具",
-                            _serviceId, _serviceName, tools.Count);
-                    }
-
-                    _toolsReceived = true;
-
-                    _logger.LogInformation("三方工具已注册，等待设备 Kernel 更新...");
                 }
-                else
+
+                // 确定服务ID
+                if (string.IsNullOrEmpty(realServiceId))
                 {
-                    _logger.LogWarning("tools/list 响应中没有找到 tools 数组");
+                    realServiceId = tools.Count > 0
+                        ? tools[0].Name.Split('.').FirstOrDefault() ?? "unknown"
+                        : "unknown";
+                    realServiceName = realServiceName ?? $"{realServiceId}服务";
                 }
+
+                // 更新服务标识
+                _serviceId = realServiceId;
+                _serviceName = realServiceName;
+
+                // 更新绑定信息
+                var existingBinding = _serviceStore.GetBinding(_deviceToken, "pending");
+                if (existingBinding != null)
+                {
+                    // 删除临时绑定
+                    _serviceStore.DeleteBinding(_deviceToken, "pending");
+
+                    // 创建正式绑定
+                    var binding = new ServiceBinding
+                    {
+                        DeviceToken = _deviceToken,
+                        ServiceId = _serviceId,
+                        ServiceName = _serviceName ?? _serviceId,
+                        Tools = tools,
+                        FirstConnectedAt = existingBinding.FirstConnectedAt,
+                        LastConnectedAt = DateTime.UtcNow,
+                        LastToolsUpdateAt = DateTime.UtcNow,
+                        LastUpdatedAt = DateTime.UtcNow,
+                        CurrentConnectionId = _connectionId
+                    };
+
+                    _serviceStore.SaveBinding(binding);
+
+                    // 注册连接到连接管理器
+                    _connectionManager.RegisterConnection(_deviceToken, _serviceId, _webSocket, _connectionId);
+
+                    _logger.LogInformation("服务识别完成：{ServiceId}({ServiceName})，注册了 {ToolCount} 个工具",
+                        _serviceId, _serviceName, tools.Count);
+                }
+
+                _toolsReceived = true;
+
+                // 发布服务绑定事件
+                _eventPublisher.Publish(new ServiceBoundEvent(
+                    _deviceToken,
+                    _serviceId,
+                    _serviceName ?? _serviceId,
+                    DateTime.UtcNow));
+
+                _logger.LogInformation("已发布 ServiceBoundEvent，设备Token: {Token}, 服务: {ServiceId}",
+                    _deviceToken, _serviceId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "处理工具列表响应出错，设备Token: {Token}", _deviceToken);
-            }
-        }
-
-        /// <summary>
-        /// 处理工具调用（从小智服务端转发过来的请求）
-        /// </summary>
-        private async Task HandleToolCallAsync(JsonObject request)
-        {
-            var id = request["id"]?.GetValue<int>();
-            var @params = request["params"]?.AsObject();
-            var toolName = @params?["name"]?.GetValue<string>();
-            var arguments = @params?["arguments"]?.AsObject();
-
-            _logger.LogInformation("🔧 收到工具调用请求：{ToolName}，参数：{Arguments}",
-                toolName, arguments?.ToJsonString());
-
-            try
-            {
-                // 这里不需要实现具体逻辑，因为这是从三方服务收到的请求
-                // 实际上，当三方服务（如HA）主动调用工具时，这个请求才会进来
-                // 但现在我们是作为Server接收HA的连接，所以正常情况下HA不会主动调用
-
-                // 返回成功响应（实际应该根据工具名调用对应的功能）
-                var result = new JsonObject
-                {
-                    ["jsonrpc"] = "2.0",
-                    ["id"] = id,
-                    ["result"] = new JsonObject
-                    {
-                        ["content"] = new JsonArray
-                        {
-                            new JsonObject
-                            {
-                                ["type"] = "text",
-                                ["text"] = "操作成功"
-                            }
-                        }
-                    }
-                };
-                await SendJsonAsync(result);
-            }
-            catch (Exception ex)
-            {
-                var error = new JsonObject
-                {
-                    ["jsonrpc"] = "2.0",
-                    ["id"] = id,
-                    ["error"] = new JsonObject
-                    {
-                        ["code"] = -32603,
-                        ["message"] = ex.Message
-                    }
-                };
-                await SendJsonAsync(error);
             }
         }
 
@@ -506,7 +464,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             try
             {
                 var jsonString = json.ToJsonString();
-                _logger.LogInformation("📤 发送消息: {Json}", jsonString);
+                _logger.LogDebug("发送消息: {Json}", jsonString);
 
                 var bytes = Encoding.UTF8.GetBytes(jsonString);
                 await _webSocket.SendAsync(
@@ -547,17 +505,18 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 
                 if (_serviceId != null && _serviceId != "pending")
                 {
-                    _serviceStore.UpdateConnectionStatus(_deviceToken, _serviceId, ConnectionId, false);
-                    _toolRegistry.RemoveConnection(_deviceToken, _serviceId);
-                    _logger.LogInformation("🔌 连接已关闭，服务：{ServiceId}，设备Token: {Token}",
+                    _connectionManager.RemoveConnection(_deviceToken, _serviceId);
+
+                    // 发布解绑事件
+                    _eventPublisher.Publish(new ServiceUnboundEvent(_deviceToken, _serviceId));
+
+                    _logger.LogInformation("连接已关闭，服务：{ServiceId}，设备Token: {Token}",
                         _serviceId, _deviceToken);
                 }
                 else
                 {
-                    var tempKey = $"binding:{_deviceToken}:pending";
-                    _serviceStore.Remove(tempKey);
-                    _toolRegistry.UnregisterDeviceTools(_deviceToken);
-                    _logger.LogInformation("🔌 临时连接已关闭，设备Token: {Token}", _deviceToken);
+                    _serviceStore.DeleteBinding(_deviceToken, "pending");
+                    _logger.LogInformation("临时连接已关闭，设备Token: {Token}", _deviceToken);
                 }
             }
         }

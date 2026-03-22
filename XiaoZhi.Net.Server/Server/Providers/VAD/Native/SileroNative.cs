@@ -21,7 +21,7 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Native
 
         private IVadOnnxModel? _vadOnnxModel;
         private int _sampleRate = 16000;
-        private int _closeConnectionNoVoiceTime = 60;
+        private int _closeConnectionNoVoiceTime = 120;
 
         private float _silenceThresholdSecond;
         private float _threshold;
@@ -58,10 +58,11 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Native
                     return false;
                 }
 
-                this._silenceThresholdSecond = modelSetting.Config.GetConfigValueOrDefault("SilenceThresholdSecond", 0.7f);
-                this._threshold = modelSetting.Config.GetConfigValueOrDefault("Threshold", 0.5f);
-                this._thresholdLow = modelSetting.Config.GetConfigValueOrDefault("ThresholdLow", 0.2f);
-                this._closeConnectionNoVoiceTime = modelSetting.Config.GetConfigValueOrDefault("CloseConnectionNoVoiceTime", 60);
+              // 从模型配置中获取音频处理相关阈值参数，包括静音检测时间阈值、音量检测阈值、低音量阈值以及无语音时自动关闭连接的时间
+this._silenceThresholdSecond = modelSetting.Config.GetConfigValueOrDefault("SilenceThresholdSecond", 1.4f);
+this._threshold = modelSetting.Config.GetConfigValueOrDefault("Threshold", 0.5f);
+this._thresholdLow = modelSetting.Config.GetConfigValueOrDefault("ThresholdLow", 0.2f);
+this._closeConnectionNoVoiceTime = modelSetting.Config.GetConfigValueOrDefault("CloseConnectionNoVoiceTime", 120);
 
                 this.FrameSize = this._sampleRate == SAMPLING_RATE_16K ? 512 : 256;
 

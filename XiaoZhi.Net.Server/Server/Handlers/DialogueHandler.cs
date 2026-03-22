@@ -200,20 +200,7 @@ namespace XiaoZhi.Net.Server.Handlers
         /// <returns>异步任务</returns>
         public async void NoVoiceCloseConnect(Workflow<string> workflow)
         {
-            Session session = this.SendOutter.GetSession();
-            try
-            {
-                this.Logger.LogInformation($"设备 {session?.DeviceId} 开始处理无语音关闭");
-
-                // ✅ 只做一件事：调用LLM说再见
-                await this.Handle(workflow);
-
-                this.Logger.LogInformation($"设备 {session?.DeviceId} LLM告别语生成完成");
-            }
-            catch (Exception ex)
-            {
-                this.Logger.LogError(ex, $"设备 {session?.DeviceId} 处理无语音关闭时出错");
-            }
+            await this.Handle(workflow);
         }
 
         /// <summary>
