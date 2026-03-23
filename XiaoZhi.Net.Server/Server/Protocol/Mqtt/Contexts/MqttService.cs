@@ -80,7 +80,6 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts
         /// <exception cref="ArgumentNullException">mqttConfig或connectionValidator为空时抛出</exception>
         public void Configure(MqttServerConfig mqttConfig, Func<ValidatingConnectionEventArgs, Task> connectionValidator)
         {
-            // 参数校验
             if (mqttConfig == null)
             {
                 throw new ArgumentNullException(nameof(mqttConfig), "MQTT配置不能为空");
@@ -95,6 +94,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts
 
             // 1. 创建MQTT服务端选项构建器（适配5.1.0.1559版本）
             var optionsBuilder = new MqttServerOptionsBuilder();
+
             // 2. 基础TCP配置
             optionsBuilder.WithDefaultEndpoint(); // 启用默认TCP端点（必填）
             optionsBuilder.WithDefaultEndpointPort(mqttConfig.Port); // 设置监听端口
@@ -120,7 +120,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts
             {
                 _logger.Information("启用TLS加密，证书路径：{CertPath}", mqttConfig.TlsCertPath);
                 optionsBuilder.WithEncryptedEndpoint(); // 启用加密端点
-                optionsBuilder.WithEncryptedEndpointPort(mqttConfig.Port + 8883); // TLS默认端口：8883
+                optionsBuilder.WithEncryptedEndpointPort(8883); // TLS默认端口：8883
                 optionsBuilder.WithEncryptionCertificate(new X509Certificate2(mqttConfig.TlsCertPath, mqttConfig.TlsCertPassword)); // 加载证书
                 optionsBuilder.WithEncryptionSslProtocol(SslProtocols.Tls12); // 指定TLS版本（推荐Tls12）
                 optionsBuilder.WithRemoteCertificateValidationCallback((sender, certificate, chain, sslPolicyErrors) =>

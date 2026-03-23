@@ -29,6 +29,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         private readonly IEventPublisher _eventPublisher;
         private readonly string _deviceToken;
         private readonly string _connectionId;
+        private readonly bool _isValidToken;
         private readonly CancellationTokenSource _cts = new();
 
         // 服务标识
@@ -49,7 +50,8 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             McpCallManager callManager,
             IEventPublisher eventPublisher,
             string deviceToken,
-            string connectionId)
+            string connectionId ,
+            bool isValidToken)
         {
             _webSocket = webSocket;
             _logger = logger;
@@ -59,6 +61,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             _eventPublisher = eventPublisher;
             _deviceToken = deviceToken;
             _connectionId = connectionId;
+            _isValidToken = isValidToken;
         }
 
         /// <summary>
@@ -408,47 +411,50 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                 _serviceId = realServiceId;
                 _serviceName = realServiceName;
 
-                // 更新绑定信息
-                var existingBinding = _serviceStore.GetBinding(_deviceToken, "pending");
-                if (existingBinding != null)
+                // 删除临时绑定
+                _serviceStore.DeleteBinding(_deviceToken, "pending");
+
+                // 创建正式绑定
+                var binding = new ServiceBinding
                 {
-                    // 删除临时绑定
-                    _serviceStore.DeleteBinding(_deviceToken, "pending");
+                    DeviceToken = _deviceToken,
+                    ServiceId = _serviceId,
+                    ServiceName = _serviceName ?? _serviceId,
+                    Tools = tools,
+                    FirstConnectedAt = DateTime.UtcNow,
+                    LastConnectedAt = DateTime.UtcNow,
+                    LastToolsUpdateAt = DateTime.UtcNow,
+                    LastUpdatedAt = DateTime.UtcNow,
+                    CurrentConnectionId = _connectionId
+                };
 
-                    // 创建正式绑定
-                    var binding = new ServiceBinding
-                    {
-                        DeviceToken = _deviceToken,
-                        ServiceId = _serviceId,
-                        ServiceName = _serviceName ?? _serviceId,
-                        Tools = tools,
-                        FirstConnectedAt = existingBinding.FirstConnectedAt,
-                        LastConnectedAt = DateTime.UtcNow,
-                        LastToolsUpdateAt = DateTime.UtcNow,
-                        LastUpdatedAt = DateTime.UtcNow,
-                        CurrentConnectionId = _connectionId
-                    };
+                _serviceStore.SaveBinding(binding);
 
-                    _serviceStore.SaveBinding(binding);
+                // 注册连接到连接管理器
+                _connectionManager.RegisterConnection(_deviceToken, _serviceId, _webSocket, _connectionId);
 
-                    // 注册连接到连接管理器
-                    _connectionManager.RegisterConnection(_deviceToken, _serviceId, _webSocket, _connectionId);
-
-                    _logger.LogInformation("服务识别完成：{ServiceId}({ServiceName})，注册了 {ToolCount} 个工具",
-                        _serviceId, _serviceName, tools.Count);
-                }
+                _logger.LogInformation("服务识别完成：{ServiceId}({ServiceName})，注册了 {ToolCount} 个工具，Token状态: {IsValid}",
+                    _serviceId, _serviceName, tools.Count, _isValidToken ? "有效" : "无效（待设备上线）");
 
                 _toolsReceived = true;
 
-                // 发布服务绑定事件
-                _eventPublisher.Publish(new ServiceBoundEvent(
-                    _deviceToken,
-                    _serviceId,
-                    _serviceName ?? _serviceId,
-                    DateTime.UtcNow));
+                // ✅ 只有token有效时，才发布服务绑定事件
+                if (_isValidToken)
+                {
+                    _eventPublisher.Publish(new ServiceBoundEvent(
+                        _deviceToken,
+                        _serviceId,
+                        _serviceName ?? _serviceId,
+                        DateTime.UtcNow));
 
-                _logger.LogInformation("已发布 ServiceBoundEvent，设备Token: {Token}, 服务: {ServiceId}",
-                    _deviceToken, _serviceId);
+                    _logger.LogInformation("已发布 ServiceBoundEvent，设备Token: {Token}, 服务: {ServiceId}",
+                        _deviceToken, _serviceId);
+                }
+                else
+                {
+                    _logger.LogInformation("Token无效，服务 {ServiceId} 的工具已保存，等待设备上线后自动注册",
+                        _serviceId);
+                }
             }
             catch (Exception ex)
             {

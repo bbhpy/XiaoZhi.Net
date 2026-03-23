@@ -102,40 +102,45 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
                 throw new ArgumentException($"UDP数据包长度不足，最小需要{headerLength}字节，实际{buffer.Length}字节", nameof(buffer));
 
             var packet = new UdpAudioPacket();
-
-            // 2. 逐字段解析（.NET 8 推荐用 BinaryPrimitives 处理字节序，比 IPAddress.NetworkToHostOrder 更通用）
-            // Type: 1字节，偏移0
-            packet.Type = buffer[0];
-            if (packet.Type != 0x01)
-                throw new InvalidDataException($"非法的数据包类型：0x{packet.Type:X2}，预期0x01");
-
-            // Flags: 1字节，偏移1
-            packet.Flags = buffer[1];
-
-            // PayloadLength: 2字节，偏移2，网络字节序（大端）→ 主机序
-            packet.PayloadLength = BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(2, 2));
-
-            // SSRC: 4字节，偏移4，网络字节序→主机序
-            packet.Ssrc = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(4, 4));
-
-            // Timestamp: 4字节，偏移8，网络字节序→主机序
-            packet.Timestamp = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(8, 4));
-
-            // Sequence: 4字节，偏移12，网络字节序→主机序
-            packet.Sequence = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(12, 4));
-
-            // 3. 解析Payload（核心修正：计算剩余长度，替代 RemainingLength 方法）
-            // 剩余长度 = 总长度 - 头部长度
-            int remainingLength = buffer.Length - headerLength;
-            if (remainingLength != packet.PayloadLength)
+            try
             {
-                throw new InvalidDataException(
-                    $"Payload长度不匹配：头部声明{packet.PayloadLength}字节，实际剩余{remainingLength}字节");
+                // 2. 逐字段解析（.NET 8 推荐用 BinaryPrimitives 处理字节序，比 IPAddress.NetworkToHostOrder 更通用）
+                // Type: 1字节，偏移0
+                packet.Type = buffer[0];
+                if (packet.Type != 0x01)
+                    throw new InvalidDataException($"非法的数据包类型：0x{packet.Type:X2}，预期0x01");
+
+                // Flags: 1字节，偏移1
+                packet.Flags = buffer[1];
+
+                // PayloadLength: 2字节，偏移2，网络字节序（大端）→ 主机序
+                packet.PayloadLength = BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(2, 2));
+
+                // SSRC: 4字节，偏移4，网络字节序→主机序
+                packet.Ssrc = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(4, 4));
+
+                // Timestamp: 4字节，偏移8，网络字节序→主机序
+                packet.Timestamp = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(8, 4));
+
+                // Sequence: 4字节，偏移12，网络字节序→主机序
+                packet.Sequence = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(12, 4));
+
+                // 3. 解析Payload（核心修正：计算剩余长度，替代 RemainingLength 方法）
+                // 剩余长度 = 总长度 - 头部长度
+                int remainingLength = buffer.Length - headerLength;
+                if (remainingLength != packet.PayloadLength)
+                {
+                    throw new InvalidDataException(
+                        $"Payload长度不匹配：头部声明{packet.PayloadLength}字节，实际剩余{remainingLength}字节");
+                }
+
+                // 读取Payload（偏移16，长度=PayloadLength）
+                packet.Payload = buffer.AsSpan(headerLength, packet.PayloadLength).ToArray();
             }
-
-            // 读取Payload（偏移16，长度=PayloadLength）
-            packet.Payload = buffer.AsSpan(headerLength, packet.PayloadLength).ToArray();
-
+            catch (Exception ex)
+            {
+                throw new InvalidDataException("UDP数据包解析错误", ex);
+            }
             return packet;
         }
     }

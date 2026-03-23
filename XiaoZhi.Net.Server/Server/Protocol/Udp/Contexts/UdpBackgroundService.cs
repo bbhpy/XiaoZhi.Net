@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using System;
@@ -28,26 +29,24 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
         private readonly UdpMessageDispatch _messageDispatch;
         private readonly XiaoZhiConfig _config;
         private readonly ILogger<UdpBackgroundService> _logger;
-
         public UdpBackgroundService(
             MqttUdpSessionStore sessionManager,
             UdpMessageDispatch messageDispatch,
             XiaoZhiConfig config,
-            ILogger<UdpBackgroundService> logger)
+            ILogger<UdpBackgroundService> logger,
+            UdpClient udpClient)
         {
             _mqttUdpSessionStore = sessionManager;
             _messageDispatch = messageDispatch;
             _config = config;
             _logger = logger;
-
-            _udpClient = new UdpClient(_config.UdpConfig.Port);
+            _udpClient = udpClient;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             _logger.LogInformation("UDP后台服务已启动，监听端口：{Port}", _config.UdpConfig.Port);
 
-            // 注册取消令牌的回调，停止时关闭UDP客户端
             stoppingToken.Register(() =>
             {
                 _logger.LogInformation("UDP后台服务正在停止...");
@@ -58,84 +57,82 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
 
             try
             {
-                // 循环接收UDP包，直到收到停止信号
                 while (!stoppingToken.IsCancellationRequested)
                 {
                     UdpReceiveResult receiveResult;
                     byte[] data;
                     IPEndPoint clientEP;
+
                     try
                     {
-                        // 异步接收UDP包，支持取消
+                        // 使用接收专用客户端接收数据
                         receiveResult = await _udpClient.ReceiveAsync(stoppingToken);
-                        // 空包过滤
+
                         if (receiveResult.Buffer == null || receiveResult.Buffer.Length == 0)
                         {
                             _logger.LogWarning("收到空的UDP数据包，远端地址：{RemoteEndPoint}", receiveResult.RemoteEndPoint);
                             continue;
                         }
+
                         data = receiveResult.Buffer;
                         clientEP = receiveResult.RemoteEndPoint;
 
                         if (!UdpAudioPacket.TryParse(data, out var packet))
                         {
-                            string bufferHex = BitConverter.ToString(data).Replace("-", ""); // 转十六进制（无分隔符）
-                            string bufferText = Encoding.UTF8.GetString(data); // 同时转UTF8文本（兼容文本格式心跳包）
+                            string bufferHex = BitConverter.ToString(data).Replace("-", "");
+                            string bufferText = Encoding.UTF8.GetString(data);
                             _logger.LogWarning(
                                 "UDP数据包格式错误，客户端：{ClientEP}，数据包长度：{Length}字节，十六进制内容：{BufferHex}，UTF8文本：{BufferText}",
                                 clientEP, data.Length, bufferHex, bufferText
                             );
-                            //_logger.Warning("UDP数据包格式错误，客户端：{ClientEP}", clientEP);
                             continue;
                         }
+
                         var udpSession = _mqttUdpSessionStore.GetSessionBySsrc(packet.Ssrc);
                         if (udpSession != null)
-                        {    
-                            //await udpSession!.OnUdpMessageReceivedAsync(data);
-                            udpSession.UpdateUdpRemoteEndPoint(clientEP);
+                        {
+                            udpSession.UpdateUdpRemoteEndPoint((clientEP));
                             udpSession.RefreshLastActivityTime();
-                            byte[] bytes= AesKeyGenerator.DecryptUdpAudioPayload(packet.Payload,udpSession.UdpAesNonce,packet.PayloadLength,packet.Timestamp,packet.Sequence,udpSession.UdpAesKey);
-                            //_logger.LogInformation("UDP音频包，客户端：{ClientEP}消息十六进制：{json}", clientEP, BitConverter.ToString(bytes).Replace("-", ""));
+
+                            byte[] bytes = AesKeyGenerator.DecryptUdpAudioPayload(
+                                packet.Payload,
+                                udpSession.UdpAesNonce,
+                                packet.PayloadLength,
+                                packet.Timestamp,
+                                packet.Sequence,
+                                udpSession.UdpAesKey);
+
                             if (udpSession.XiaoZhiSession != null)
                             {
                                 await udpSession.XiaoZhiSession.HandlerPipeline.HandleBinaryMessageAsync(bytes);
                             }
-                            // 4. 分发UDP消息（交给业务层处理）
-                            //await _messageDispatch.d(udpSession, receiveResult.Buffer, stoppingToken);
                         }
                     }
                     catch (OperationCanceledException)
                     {
-                        // 正常停止，无需记录错误
                         _logger.LogInformation("UDP接收操作已取消");
                         break;
                     }
                     catch (ObjectDisposedException)
                     {
-                        // UDP客户端已释放，退出循环
                         _logger.LogInformation("UDP客户端已释放，停止接收");
                         break;
                     }
                     catch (Exception ex)
                     {
-                        // 非预期异常，记录并继续接收（避免服务崩溃）
                         _logger.LogError(ex, "UDP接收数据时发生异常");
-                        // 短暂延迟，避免异常循环占用CPU
                         await Task.Delay(100, stoppingToken);
                         continue;
                     }
-
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogCritical(ex, "UDP后台服务主循环发生致命异常");
-                // 可选：触发服务重启/告警
                 throw;
             }
             finally
             {
-                // 最终清理
                 if (_udpClient != null)
                 {
                     _udpClient.Close();
@@ -145,15 +142,31 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
 
             _logger.LogInformation("UDP后台服务执行完成");
         }
-        // 新增：线程安全的锁，避免并发发送/接收冲突
-        private readonly object _udpSendLock = new object();
+        // 检查地址类型
         /// <summary>
-        /// 通用UDP下发函数（直接指定目标IP/Port）
+        /// 获取实际的 IPEndPoint（如果是 IPv4 映射地址则转为纯 IPv4）
         /// </summary>
-        /// <param name="targetEP">目标客户端的IPEndPoint</param>
-        /// <param name="data">二进制数据</param>
-        /// <param name="cancellationToken">取消令牌</param>
-        /// <returns>是否发送成功</returns>
+        /// <param name="endpoint">原始端点</param>
+        /// <returns>实际的端点（IPv4 映射地址会转为 IPv4）</returns>
+        public IPEndPoint GetActualIPEndPoint(IPEndPoint endpoint)
+        {
+            if (endpoint == null) return null;
+
+            // 检查是否为 IPv4 映射到 IPv6 的地址
+            if (endpoint.Address.IsIPv4MappedToIPv6)
+            {
+                // 转换为纯 IPv4 地址
+                IPAddress actualAddress = endpoint.Address.MapToIPv4();
+                // 返回新的 IPEndPoint（端口保持不变）
+                return new IPEndPoint(actualAddress, endpoint.Port);
+            }
+
+            // 纯 IPv4 或纯 IPv6 直接返回原对象
+            return endpoint;
+        }
+        /// <summary>
+        /// 通用UDP下发函数（每次发送创建新的发送客户端）
+        /// </summary>
         public async Task<bool> SendUdpMessageAsync(IPEndPoint targetEP, byte[] data, CancellationToken cancellationToken = default)
         {
             if (targetEP == null)
@@ -161,6 +174,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
                 _logger.LogWarning("UDP下发失败：目标地址为空");
                 return false;
             }
+
             if (data == null || data.Length == 0)
             {
                 _logger.LogWarning("UDP下发失败：发送数据为空，目标地址={RemoteEP}", targetEP);
@@ -169,12 +183,8 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
 
             try
             {
-                lock (_udpSendLock)
-                {
-                    _udpClient.SendAsync(data, data.Length, targetEP);
-                }
-                //_logger.LogInformation("UDP下发成功：目标地址={RemoteEP}，数据长度={Length}字节",
-                //    targetEP, data.Length);
+                await _udpClient.SendAsync(data, data.Length, targetEP);
+                //_logger.LogDebug("UDP下发成功：目标地址={RemoteEP}，数据长度={Length}字节", targetEP, data.Length);
                 return true;
             }
             catch (Exception ex)
@@ -183,6 +193,5 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
                 return false;
             }
         }
-
     }
 }

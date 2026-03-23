@@ -161,6 +161,10 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                 return this.XiaoZhiSession;
             }
         }
+        /// <summary>
+        /// 更新UDP远程端点
+        /// </summary>
+        /// <param name="udpRemoteEndPoint"></param>
         public void UpdateUdpRemoteEndPoint(IPEndPoint udpRemoteEndPoint)
         {
             if (this.UdpRemoteEndPoint != udpRemoteEndPoint)
@@ -334,8 +338,11 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         {
             //byte[] udpjm= AesKeyGenerator.AesCtrEncrypt(payload, UdpAesKey, UdpAesNonce);
             //byte[] udpPacket = UdpAudioPacketBuilder.BuildUdpAudioPacket(udpjm, Ssrc);
-            byte[] udpPacket = _udpAudioSender.BuildUdpPacket(payload);
-            bool sendBytes = await _udpClient.SendUdpMessageAsync(UdpRemoteEndPoint, udpPacket);
+            if (UdpRemoteEndPoint != null)
+            {
+                byte[] udpPacket = _udpAudioSender.BuildUdpPacket(payload);
+                bool sendBytes = await _udpClient.SendUdpMessageAsync(UdpRemoteEndPoint, udpPacket);
+            }
             //if (!sendBytes)
             //{
             //    _logger.LogWarning(
@@ -358,6 +365,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         {
             string to1 = $"device/{SessionId}/#";
             string to= Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(to1));
+            //UpdateUdpRemoteEndPoint(remoteEndPoint as IPEndPoint);
             //await mqttServer.SubscribeAsync(clientId, to);
             // 2. 构建 5.x 版本的 MqttTopicFilter 集合（关键）
             var topicFilters = new List<MqttTopicFilter>

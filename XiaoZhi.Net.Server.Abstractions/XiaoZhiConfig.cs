@@ -233,7 +233,10 @@ namespace XiaoZhi.Net.Server
         /// MQTT服务监听端口（默认：1883，MQTT标准端口）
         /// </summary>
         public int Port { get; set; } = 1883;
-
+        /// <summary>
+        /// 
+        /// </summary>
+        public int TlsPort { get; set; } = 8883;
         /// <summary>
         /// 是否启用TLS加密（默认：false，生产环境建议开启）
         /// </summary>

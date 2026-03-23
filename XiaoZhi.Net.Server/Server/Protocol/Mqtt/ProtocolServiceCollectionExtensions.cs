@@ -51,6 +51,38 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                 // MQTT核心服务（单例，全局一个MQTT服务端）
                 services.AddSingleton<MqttService>();
 
+                // ========== 2. UDP 接收客户端（单例，长期监听） ==========
+                services.AddSingleton<UdpClient>(sp=>
+                {
+                    var xiaoZhiConfig = sp.GetRequiredService<XiaoZhiConfig>();
+                    var logger = sp.GetRequiredService<Serilog.ILogger>();
+
+                    int udpPort = xiaoZhiConfig.UdpConfig.Port > 0 ? xiaoZhiConfig.UdpConfig.Port : 8888;
+
+                    try
+                    {
+                        // 创建 IPv6 双栈 Socket，支持 IPv4 和 IPv6 客户端
+                        var socket = new Socket(AddressFamily.InterNetworkV6, SocketType.Dgram, ProtocolType.Udp);
+                        // 关键：禁用 IPv6Only，启用双栈（同时监听 IPv4 和 IPv6）
+                        socket.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, false);
+                        socket.Bind(new IPEndPoint(IPAddress.IPv6Any, udpPort));
+
+                        var udpClient = new UdpClient();
+                        udpClient.Client = socket;
+
+                        logger.Information("UDP接收服务（单例）启动成功，监听端口：{Port}，双栈模式（IPv4+IPv6）", udpPort);
+                        return udpClient;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Error(ex, "创建UDP接收客户端(IPv6双栈)失败，尝试使用IPv4模式");
+                        // 回退到 IPv4
+                        var udpClient = new UdpClient(new IPEndPoint(IPAddress.Any, udpPort));
+                        logger.Information("UDP接收服务启动IPv4模式，监听端口：{Port}", udpPort);
+                        return udpClient;
+                    }
+                });
+
                 // ========== 2. 瞬态服务（每次请求/new） ==========
                 // MQTT会话（每个客户端连接创建一个新实例）
                 services.AddTransient<MqttUdpSession>();
@@ -70,19 +102,14 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                 // 3. 注册MqttUdpSendOutter（瞬态，每次使用新建，关联会话+MQTT/UDP客户端）
                 services.AddTransient<MqttUdpSendOutter>(sp =>
                 {
-                    // 注意：SendOutter依赖具体的MqttUdpCompositeSession，此处仅注册类型，
-                    // 实际创建需结合会话实例（建议在UdpSessionManager中按需创建）
-                    // 若IMqttClient未注册，需先补充注册：services.AddSingleton<IMqttClient>(sp => new MqttClient());
                     var mqttClient = sp.GetRequiredService<IMqttClient>();
-                    var udpClient = sp.GetRequiredService<UdpClient>();
+                    var senderUdpClient = sp.GetRequiredKeyedService<UdpClient>("sender"); // 使用发送专用客户端
                     var logger = sp.GetRequiredService<ILogger<MqttUdpSendOutter>>();
 
-                    // 临时占位（实际使用时需传入具体的MqttUdpCompositeSession）
-                    // 推荐：在UdpSessionManager中创建会话时，为会话绑定SendOutter
                     return new MqttUdpSendOutter(
-                        session: null, // 实际使用时替换为具体会话
+                        session: null,
                         mqttClient: mqttClient,
-                        udpClient: udpClient,
+                        senderUdpClient: senderUdpClient,  // 注入发送客户端
                         logger: logger);
                 });
 
@@ -117,32 +144,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                         SessionTimeoutSeconds = timeoutSeconds
                     };
                 });
-
-                // 8. 注册原生UdpClient实例（单例，双栈模式）
-                services.AddSingleton<UdpClient>(sp =>
-                {
-                    var xiaoZhiConfig = sp.GetRequiredService<XiaoZhiConfig>();
-                    var logger = sp.GetRequiredService<Serilog.ILogger>();
-
-                    int udpPort = xiaoZhiConfig.UdpConfig.Port > 0 ? xiaoZhiConfig.UdpConfig.Port : 8888;
-
-                    // 关键：使用 IPAddress.IPv6Any 实现双栈监听
-                    // 这样会同时接收IPv4和IPv6的UDP数据包
-                    var localEndPoint = new IPEndPoint(IPAddress.IPv6Any, udpPort);
-
-                    var udpClient = new UdpClient(localEndPoint);
-
-                    // 重要：需要禁用IPv6 only模式，启用双栈
-                    // 这样IPv4连接会被映射为IPv6地址格式
-                    udpClient.Client.SetSocketOption(
-                        SocketOptionLevel.IPv6,
-                        SocketOptionName.IPv6Only,
-                        0); // 0 = false，禁用IPv6 Only模式
-
-                    logger.Information("UDP服务启动双栈模式，监听端口：{Port}，支持IPv4和IPv6连接", udpPort);
-
-                    return udpClient;
-                });
+              
 
             });
         }

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MQTTnet;
 using MQTTnet.Protocol;
 using System;
@@ -22,9 +23,9 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
     internal class MqttUdpSendOutter : IBizSendOutter
     {
         // 依赖的核心组件
-        private readonly MqttUdpSession _session;
+        private readonly MqttUdpSession? _session;
         private readonly IMqttClient _mqttClient; // MQTT客户端（需提前注册到DI）
-        private readonly UdpClient _udpClient;     // UDP客户端（复用已注册的实例）
+        private readonly UdpClient _udpClient;    
         private readonly ILogger<MqttUdpSendOutter> _logger;
 
 
@@ -32,14 +33,14 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         /// 构造函数：注入依赖，初始化加密上下文
         /// </summary>
         public MqttUdpSendOutter(
-            MqttUdpSession session,
+            MqttUdpSession? session,
             IMqttClient mqttClient,
-            UdpClient udpClient,
+            UdpClient senderUdpClient,
             ILogger<MqttUdpSendOutter> logger)
         {
             _session = session ?? throw new ArgumentNullException(nameof(session));
-            _mqttClient = mqttClient ?? throw new ArgumentNullException(nameof(mqttClient));
-            _udpClient = udpClient ?? throw new ArgumentNullException(nameof(udpClient));
+            _mqttClient = mqttClient ?? throw new ArgumentNullException(nameof(mqttClient)); 
+            _udpClient = senderUdpClient ?? throw new ArgumentNullException(nameof(senderUdpClient));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         }
@@ -211,7 +212,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                 throw new ArgumentNullException(nameof(json));
 
             // JSON消息默认走MQTT（控制类消息）
-            string defaultTopic = $"device/{_session.DeviceId}/control";
+            string defaultTopic = $"device/{_session?.DeviceId}/control";
             // 构造应用消息
             var applicationMessage = new MqttApplicationMessageBuilder()
                 .WithTopic(defaultTopic)
@@ -221,7 +222,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
 
             await _mqttClient.PublishAsync(applicationMessage);
             _logger.LogDebug("MQTT发送JSON：SessionId={SessionId}，Topic={Topic}，内容={Json}",
-                _session.SessionId, defaultTopic, json);
+                _session?.SessionId, defaultTopic, json);
         }
 
         /// <summary>
@@ -232,11 +233,10 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             if (bytePacket == null || bytePacket.Length == 0)
                 throw new ArgumentNullException(nameof(bytePacket));
 
-            // 解析数据包类型：首字节为type（0x01=音频包，其他=控制包）
             byte packetType = bytePacket[0];
-            if (packetType == 0x01 && _session.UdpRemoteEndPoint != null)
+            if (packetType == 0x01 && _session?.UdpRemoteEndPoint != null)
             {
-                // 音频包：走UDP，加密后发送
+                // 音频包：使用发送专用客户端走UDP
                 byte[] encryptedPacket = EncryptUdpAudioPacket(bytePacket);
                 await _udpClient.SendAsync(encryptedPacket, encryptedPacket.Length, _session.UdpRemoteEndPoint);
                 _logger.LogDebug("UDP发送加密音频包：SessionId={SessionId}，长度={Length}，SSRC={SSRC}",
@@ -244,9 +244,8 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             }
             else
             {
-                // 非音频包：走MQTT发送字节数据
-                string topic = $"device/{_session.DeviceId}/data";
-                // 构造应用消息
+                // 非音频包：走MQTT
+                string topic = $"device/{_session?.DeviceId}/data";
                 var applicationMessage = new MqttApplicationMessageBuilder()
                     .WithTopic(topic)
                     .WithPayload(bytePacket)
@@ -254,7 +253,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                     .Build();
                 await _mqttClient.PublishAsync(applicationMessage);
                 _logger.LogDebug("MQTT发送字节包：SessionId={SessionId}，Topic={Topic}，长度={Length}",
-                    _session.SessionId, topic, bytePacket.Length);
+                    _session?.SessionId, topic, bytePacket.Length);
             }
         }
         #endregion

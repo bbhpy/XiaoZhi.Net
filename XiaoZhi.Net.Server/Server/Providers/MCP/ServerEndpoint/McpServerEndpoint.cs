@@ -135,11 +135,13 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         {
             WebSocketContext? wsContext = null;
             string? connectionId = null;
+            string? deviceToken = null;
+            bool isValidToken = false;
+
             try
             {
                 // 从URL中解析token参数
                 var queryString = context.Request.Url?.Query;
-                string? deviceToken = null;
 
                 if (!string.IsNullOrEmpty(queryString))
                 {
@@ -147,7 +149,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     deviceToken = queryParams["token"];
                 }
 
-                // 1. 验证token
+                // 1. 检查token是否存在
                 if (string.IsNullOrEmpty(deviceToken))
                 {
                     _logger.LogWarning("Connection without token from {RemoteEndPoint}, rejected",
@@ -158,30 +160,29 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
                     return;
                 }
 
-                // 2. 验证token是否有效
-                if (!_tokenRegistry.ValidateToken(deviceToken))
+                // 2. 验证token是否有效（但不作为拒绝连接的条件）
+                isValidToken = _tokenRegistry.ValidateToken(deviceToken);
+
+                if (!isValidToken)
                 {
-                    _logger.LogWarning("Invalid token {Token} from {RemoteEndPoint}, rejected",
+                    _logger.LogWarning("Connection with invalid token {Token} from {RemoteEndPoint}, but will still accept for pre-registration",
                         deviceToken, context.Request.RemoteEndPoint);
-                    context.Response.StatusCode = 403;
-                    context.Response.StatusDescription = "Invalid token";
-                    context.Response.Close();
-                    return;
                 }
 
-                // token有效，接受WebSocket连接
+                // ✅ 无论token是否有效，都接受WebSocket连接
                 wsContext = await context.AcceptWebSocketAsync(null);
                 connectionId = Guid.NewGuid().ToString("N");
 
-                _logger.LogInformation("New WebSocket connection from {RemoteEndPoint} with valid token: {Token}, ConnectionId: {ConnectionId}",
-                    context.Request.RemoteEndPoint, deviceToken, connectionId);
+                _logger.LogInformation("New WebSocket connection from {RemoteEndPoint} with token: {Token}, IsValid: {IsValid}, ConnectionId: {ConnectionId}",
+                    context.Request.RemoteEndPoint, deviceToken, isValidToken, connectionId);
 
-                // 创建连接实例
+                // 创建连接实例（传递isValidToken标志）
                 var connection = ActivatorUtilities.CreateInstance<McpServerConnection>(
                     _serviceProvider,
                     wsContext.WebSocket,
                     deviceToken,
-                    connectionId);
+                    connectionId,
+                    isValidToken);  // 新增参数：是否已验证
 
                 _connections[connectionId] = connection;
 
