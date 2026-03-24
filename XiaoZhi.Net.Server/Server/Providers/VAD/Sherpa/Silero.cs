@@ -2,6 +2,7 @@
 using SherpaOnnx;
 using System;
 using System.IO;
+using XiaoZhi.Net.Server.Common.Contexts;
 using XiaoZhi.Net.Server.Helpers;
 using XiaoZhi.Net.Server.I18n;
 

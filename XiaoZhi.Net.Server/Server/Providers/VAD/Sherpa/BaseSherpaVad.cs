@@ -41,7 +41,10 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Sherpa
         /// 16K采样率常量
         /// </summary>
         private const int SAMPLING_RATE_16K = 16000;
-
+        /// <summary>
+        /// 判断结束静音时长，默认1.0秒
+        /// </summary>
+        private float _minSilenceDurationSeconds = 1.0f;
         /// <summary>
         /// 用于控制VAD转换的信号量
         /// </summary>
@@ -81,6 +84,8 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Sherpa
         public bool Build(VadModelConfig vadModelConfig, ModelSetting modelSetting)
         {
             this._sampleRate = modelSetting.Config.GetConfigValueOrDefault("SampleRate", 16000);
+
+            this._minSilenceDurationSeconds = modelSetting.Config.GetConfigValueOrDefault("SilenceThresholdSecond", 1.0f);
 
             if (this._sampleRate != SAMPLING_RATE_8K && this._sampleRate != SAMPLING_RATE_16K)
             {

@@ -326,5 +326,13 @@ namespace XiaoZhi.Net.Server
         /// </summary>
         public int ReceiveBufferSize => 8192;
         public int UdpSessionTimeoutSeconds { get; set; } = 60; // UDP会话超时时间
+        /// <summary>
+        /// CPU 核心数 默认 2
+        /// </summary>
+        public int WorkerCount { get; set; } = 2;  // 0 表示 CPU 核心数
+        /// <summary>
+        /// 每个 Worker 的队列容量   默认1000
+        /// </summary>
+        public int QueueSize { get; set; } = 1000; // 每个 Worker 的队列容量
     }
 }

@@ -44,7 +44,7 @@ namespace XiaoZhi.Net.Server.Providers.TTS.Sherpa
             offlineTtsConfig.Model.NumThreads = 2;
             offlineTtsConfig.Model.Provider = "cpu";
 
-            this.SpeechRate = modelSetting.Config.GetConfigValueOrDefault("SpeechRate", 1.0f);
+            this.SpeechRate = modelSetting.Config.GetConfigValueOrDefault("SpeechRate", 1.3f);
             this.SpeakerId = modelSetting.Config.GetConfigValueOrDefault("SpeakerId", 50);
             this.AudioSavingConfig = modelSetting.Config.GetConfigValueOrDefault("FileSavingOption", new AudioSavingConfig(false));
             if (this.AudioSavingConfig.SaveFile && !Directory.Exists(this.AudioSavingConfig.SavePath))

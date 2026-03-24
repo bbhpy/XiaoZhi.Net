@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using System;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Common.Contexts;
@@ -6,6 +7,8 @@ using XiaoZhi.Net.Server.Common.Models;
 using XiaoZhi.Net.Server.Helpers;
 using XiaoZhi.Net.Server.I18n;
 using XiaoZhi.Net.Server.Management;
+using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
+using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Handlers
 {
@@ -18,6 +21,8 @@ internal class HelloMessageHandler : BaseHandler
     private readonly ProviderManager _providerManager;
     private readonly HandlerManager _handlerManager;
         private readonly DialogueHandler _dialogueHandler;
+        private readonly TokenSessionRegistry _tokenSessionRegistry;
+        private readonly IEventPublisher _eventPublisher;
 
         /// <summary>
         /// 初始化HelloMessageHandler实例
@@ -27,11 +32,16 @@ internal class HelloMessageHandler : BaseHandler
         /// <param name="config">小智配置对象</param>
         /// <param name="logger">日志记录器</param>
         public HelloMessageHandler(ProviderManager providerManager, HandlerManager handlerManager, XiaoZhiConfig config,
-        ILogger<HelloMessageHandler> logger, DialogueHandler dialogueHandler) : base(config, logger)
+        ILogger<HelloMessageHandler> logger,
+        DialogueHandler dialogueHandler,
+        TokenSessionRegistry tokenSessionRegistry,
+        IEventPublisher eventPublisher) : base(config, logger)
         {
             this._providerManager = providerManager;
             this._handlerManager = handlerManager;
             this._dialogueHandler = dialogueHandler;
+            this._tokenSessionRegistry = tokenSessionRegistry; 
+            this._eventPublisher = eventPublisher;
         }
 
     /// <summary>
@@ -90,8 +100,11 @@ internal class HelloMessageHandler : BaseHandler
                     await this.SendOutter.SendAsync(JsonHelper.Serialize(defaultHelloMessage), "hello");
                 }
 
-            // 检查并处理MCP功能支持
-            if (helloMessage.TryGetPropertyValue("features", out var features) && features is not null)
+                // 注册设备令牌和会话ID到TokenSessionRegistry 必须等到会话对象创建后才能注册，因为注册需要使用会话ID
+                _tokenSessionRegistry.Register(session.DeviceToken, session.SessionId);
+                _eventPublisher.Publish(new DeviceOnlineEvent(session.DeviceToken, session.SessionId, DateTime.UtcNow));
+                // 检查并处理MCP功能支持
+                if (helloMessage.TryGetPropertyValue("features", out var features) && features is not null)
             {
                 JsonObject featuresObj = features.AsObject();
                 if (featuresObj.TryGetPropertyValue("mcp", out var mcp) && mcp is not null)

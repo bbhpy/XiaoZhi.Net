@@ -90,15 +90,6 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                 // 1. 注册【统一】的MQTT+UDP合并会话存储（核心修改：作为底层存储）
                 services.AddSingleton<MqttUdpSessionStore>();
 
-                // 2. 注册UdpSessionManager（核心修改：注入统一存储+原有依赖）
-                services.AddSingleton<UdpSessionManager>(sp =>
-                {
-                    var sessionStore = sp.GetRequiredService<MqttUdpSessionStore>();
-                    var providerManager = sp.GetRequiredService<ProviderManager>(); // 原有依赖
-                    var logger = sp.GetRequiredService<ILogger<UdpSessionManager>>();
-                    return new UdpSessionManager(sessionStore, providerManager, logger);
-                });
-
                 // 3. 注册MqttUdpSendOutter（瞬态，每次使用新建，关联会话+MQTT/UDP客户端）
                 services.AddTransient<MqttUdpSendOutter>(sp =>
                 {
@@ -113,37 +104,19 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
                         logger: logger);
                 });
 
-                // 4. 注册UDP消息分发器（单例，依赖UdpSessionManager）
+                // ========== 3. 配置MQTT服务（启动时初始化） ==========
+                services.AddHostedService<MqttHostedService>();
+
                 services.AddSingleton<UdpMessageDispatch>();
 
-                // 5. 注册UDP鉴权校验器（单例，鉴权结果写入统一会话）
-                services.AddSingleton<UdpAuthenticationVerification>();
+                // 4. 注册 UDP Worker 池（单例 + 后台服务）
+                services.AddSingleton<UdpWorkerPool>();
+                services.AddHostedService(provider => provider.GetRequiredService<UdpWorkerPool>());
 
-                // ========== 3. 配置MQTT服务（启动时初始化） ==========
-                services.AddHostedService<MqttHostedService>(); // 后台服务启动MQTT
-
-                // 6. 注册UDP后台监听服务（后台服务，监听UDP端口收包）
+                // 5. 注册 UDP 后台监听服务（后台服务，监听 UDP 端口收包）
                 services.AddSingleton<UdpBackgroundService>();
                 services.AddHostedService(provider => provider.GetRequiredService<UdpBackgroundService>());
 
-                // 7. 注册UDP会话超时清理中间件（后台服务，依赖统一存储）
-                services.AddHostedService<UdpSessionTimeoutMiddleware>(sp =>
-                {
-                    var xiaoZhiConfig = sp.GetRequiredService<XiaoZhiConfig>();
-                    var logger = sp.GetRequiredService<ILogger<UdpSessionTimeoutMiddleware>>();
-                    var sessionStore = sp.GetRequiredService<MqttUdpSessionStore>(); // 依赖统一存储
-
-                    // 从配置读取超时时间，默认60秒
-                    int timeoutSeconds = xiaoZhiConfig.UdpConfig.UdpSessionTimeoutSeconds > 0
-                        ? xiaoZhiConfig.UdpConfig.UdpSessionTimeoutSeconds
-                        : 60;
-
-                    // 初始化超时中间件，传入统一存储
-                    return new UdpSessionTimeoutMiddleware(sessionStore, logger)
-                    {
-                        SessionTimeoutSeconds = timeoutSeconds
-                    };
-                });
               
 
             });

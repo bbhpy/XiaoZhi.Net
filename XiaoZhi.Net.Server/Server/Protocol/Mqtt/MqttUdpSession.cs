@@ -66,17 +66,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         public uint Ssrc { get; set; } // UDP音频包的SSRC（同步源标识符）
         public IPEndPoint UdpRemoteEndPoint { get; set; } // 设备UDP端点
         public string UdpAesKey { get; set; } // AES-CTR加密密钥（16进制）
-        public byte[] UdpAesKeybyte
-        { get
-            {
-                return Encoding.UTF8.GetBytes(UdpAesKey);
-            } }
         public string UdpAesNonce { get; set; } // AES-CTR随机数（16进制）
-        public byte[] UdpAesNoncebyte
-        { get
-            {
-                return Encoding.UTF8.GetBytes(UdpAesNonce);
-            } }
         public ushort LocalSequence { get; set; } // 发送端序列号（本地递增）
         public ushort RemoteSequence { get; set; } // 接收端序列号（验证连续性）
         public uint ExpectedSequence { get; set; } // 接收端预判的下一个序列号（期望值）
@@ -99,8 +89,6 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
         private readonly UdpBackgroundService _udpClient; // 复用全局UdpClient
 
         private readonly TokenSessionRegistry _tokenSessionRegistry;
-
-        private readonly IEventPublisher _eventPublisher;
         public MqttUdpSession(ILogger<MqttSession> logger, 
             MqttService mqttService, 
             MqttUdpSessionStore sessionStore,
@@ -108,8 +96,7 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             ProviderManager providerManager,
             XiaoZhiConfig xiaoZhiConfig, 
             UdpBackgroundService udpBackgroundService,
-            TokenSessionRegistry tokenSessionRegistry,
-            IEventPublisher eventPublisher)
+            TokenSessionRegistry tokenSessionRegistry)
         {
             SessionId = RandomStringGenerator.GenerateRandomString(9);
             IsMqttConnected = true;
@@ -125,7 +112,6 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             _udpClient = udpBackgroundService;
             _udpAudioSender= new UdpAudioSender(Ssrc, UdpAesKey);
             _tokenSessionRegistry = tokenSessionRegistry;
-            _eventPublisher = eventPublisher;
         }
         public Task SetMqttClientId(string clientId)
         {
@@ -395,9 +381,6 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             // 创建新的会话对象
             Session session = new Session(this.SessionId, MacAddress, string.Empty, userEndPoint,Session.ProtocolType.mqtt, this);
             session.DeviceToken = "AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa";
-            _tokenSessionRegistry.Register(session.DeviceToken, SessionId);
-
-            _eventPublisher.Publish(new DeviceOnlineEvent(session.DeviceToken, this.SessionId, DateTime.UtcNow));
             // 初始化问候消息处理器
             this._handlerManager.InitializeHelloMessageHandler(session);
             // 刷新最后活动时间

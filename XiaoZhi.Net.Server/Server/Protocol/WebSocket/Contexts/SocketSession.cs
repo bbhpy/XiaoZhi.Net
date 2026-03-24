@@ -27,19 +27,17 @@ namespace XiaoZhi.Net.Server.Protocol.WebSocket.Contexts
         private readonly HandlerManager _handlerManager;
         private readonly ProviderManager _providerManager;
         private readonly TokenSessionRegistry _tokenSessionRegistry;
-        private readonly IEventPublisher _eventPublisher;
 
         /// <summary>
         /// 初始化SocketSession实例
         /// </summary>
         /// <param name="handlerManager">处理器管理器</param>
         /// <param name="providerManager">提供者管理器</param>
-        public SocketSession(HandlerManager handlerManager, ProviderManager providerManager, TokenSessionRegistry tokenSessionRegistry, IEventPublisher eventPublisher)
+        public SocketSession(HandlerManager handlerManager, ProviderManager providerManager, TokenSessionRegistry tokenSessionRegistry)
         {
             this._handlerManager = handlerManager;
             this._providerManager = providerManager;
             _tokenSessionRegistry = tokenSessionRegistry;
-            _eventPublisher = eventPublisher;
         }
 
         /// <summary>
@@ -222,9 +220,6 @@ namespace XiaoZhi.Net.Server.Protocol.WebSocket.Contexts
             // 创建新的会话对象
             Session session = new Session(this.SessionId, deviceId, token, userEndPoint, Session.ProtocolType.websocket, this);
             session.DeviceToken = "AAAPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xp";
-            _tokenSessionRegistry.Register(session.DeviceToken, SessionId);
-
-            _eventPublisher.Publish(new DeviceOnlineEvent(session.DeviceToken, this.SessionId, DateTime.UtcNow));
             // 初始化问候消息处理器
             this._handlerManager.InitializeHelloMessageHandler(session);
 
