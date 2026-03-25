@@ -1,4 +1,4 @@
-本项目对XiaoZhi.net项目的二次开发，在此感谢XiaoZhi.net项目的开源大佬。
+本项目对[XiaoZhi.net](https://github.com/mm7h/XiaoZhi.Net)项目的二次开发，在此感谢XiaoZhi.net项目的开源大佬。
 
 在原基础上增加了mqtt+udp通讯模式，增加了三方mcp注册，但是由于还未开发数据库部分，三方mcp绑定的终端token是写死的，暂时只支持一台终端注册。
 
