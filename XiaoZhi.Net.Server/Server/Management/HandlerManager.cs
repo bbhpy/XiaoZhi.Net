@@ -92,6 +92,7 @@ namespace XiaoZhi.Net.Server.Management
         /// <returns>初始化是否成功</returns>
         public bool InitializePrivateConfig(Session session)
         {
+            _logger.LogWarning("{DeviceId} 开始初始化处理器管道", session.DeviceId);
             var textHandler = this._serviceProvider.GetRequiredService<TextHandler>();
             var audioReceiveHandler = this._serviceProvider.GetRequiredService<AudioReceiveHandler>();
             var audio2TextHandler = this._serviceProvider.GetRequiredService<Audio2TextHandler>();

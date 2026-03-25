@@ -1,4 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
 using System;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -12,14 +14,14 @@ using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Handlers
 {
- /// <summary>
-/// 处理Hello消息的处理器类，继承自BaseHandler
-/// </summary>
-internal class HelloMessageHandler : BaseHandler
-{
-    private const string DEFAULT_AUDIO_FORMAT = "opus";
-    private readonly ProviderManager _providerManager;
-    private readonly HandlerManager _handlerManager;
+    /// <summary>
+    /// 处理Hello消息的处理器类，继承自BaseHandler
+    /// </summary>
+    internal class HelloMessageHandler : BaseHandler
+    {
+        private const string DEFAULT_AUDIO_FORMAT = "opus";
+        private readonly ProviderManager _providerManager;
+        private readonly HandlerManager _handlerManager;
         private readonly DialogueHandler _dialogueHandler;
         private readonly TokenSessionRegistry _tokenSessionRegistry;
         private readonly IEventPublisher _eventPublisher;
@@ -40,57 +42,60 @@ internal class HelloMessageHandler : BaseHandler
             this._providerManager = providerManager;
             this._handlerManager = handlerManager;
             this._dialogueHandler = dialogueHandler;
-            this._tokenSessionRegistry = tokenSessionRegistry; 
+            this._tokenSessionRegistry = tokenSessionRegistry;
             this._eventPublisher = eventPublisher;
         }
 
-    /// <summary>
-    /// 获取处理器名称
-    /// </summary>
-    public override string HandlerName => nameof(HelloMessageHandler);
+        /// <summary>
+        /// 获取处理器名称
+        /// </summary>
+        public override string HandlerName => nameof(HelloMessageHandler);
 
 
-    /// <summary>
-    /// 构建处理器
-    /// </summary>
-    /// <param name="privateProvider">私有提供者</param>
-    /// <returns>构建结果</returns>
-    public override bool Build(PrivateProvider privateProvider)
-    {
-        this.Builded = true;
-        return true;
-    }
-
-    /// <summary>
-    /// 处理Hello消息
-    /// </summary>
-    /// <param name="helloMessage">Hello消息JSON对象</param>
-    public async Task Handle(JsonObject helloMessage)
-    {
-        Session session = this.SendOutter.GetSession();
-
-        HelloMessage defaultHelloMessage = new HelloMessage(this.SendOutter.SessionId, this.Config.ServerProtocol.GetDescription().ToLower(), this.Config.AudioSetting);
-
-        // 解析音频参数并更新会话设置
-        if (helloMessage.TryGetPropertyValue("audio_params", out var audioParams) && audioParams is not null)
+        /// <summary>
+        /// 构建处理器
+        /// </summary>
+        /// <param name="privateProvider">私有提供者</param>
+        /// <returns>构建结果</returns>
+        public override bool Build(PrivateProvider privateProvider)
         {
-            JsonObject audioParamsObj = audioParams.AsObject();
-            string format = audioParamsObj["format"]?.GetValue<string>() ?? DEFAULT_AUDIO_FORMAT;
-            int sampleRate = audioParamsObj["sample_rate"]?.GetValue<int>() ?? 16000;
-            int channels = audioParamsObj["channels"]?.GetValue<int>() ?? 1;
-            int frameDuration = audioParamsObj["frame_duration"]?.GetValue<int>() ?? 60;
-
-            session.AudioSetting.Format = format;
-            session.AudioSetting.SampleRate = sampleRate;
-            session.AudioSetting.Channels = channels;
-            session.AudioSetting.FrameDuration = frameDuration;
+            this.Builded = true;
+            return true;
         }
-        
-        bool providerInitResult = await this._providerManager.InitializePrivateConfigAsync(session);
-        bool handlerInitResult = this._handlerManager.InitializePrivateConfig(session);
 
-        if (providerInitResult && handlerInitResult)
+        /// <summary>
+        /// 处理Hello消息
+        /// </summary>
+        /// <param name="helloMessage">Hello消息JSON对象</param>
+        public async Task Handle(JsonObject helloMessage)
         {
+            Session session = this.SendOutter.GetSession();
+
+            HelloMessage defaultHelloMessage = new HelloMessage(this.SendOutter.SessionId, this.Config.ServerProtocol.GetDescription().ToLower(), this.Config.AudioSetting);
+
+            // 解析音频参数并更新会话设置
+            if (helloMessage.TryGetPropertyValue("audio_params", out var audioParams) && audioParams is not null)
+            {
+                JsonObject audioParamsObj = audioParams.AsObject();
+                string format = audioParamsObj["format"]?.GetValue<string>() ?? DEFAULT_AUDIO_FORMAT;
+                int sampleRate = audioParamsObj["sample_rate"]?.GetValue<int>() ?? 16000;
+                int channels = audioParamsObj["channels"]?.GetValue<int>() ?? 1;
+                int frameDuration = audioParamsObj["frame_duration"]?.GetValue<int>() ?? 60;
+
+                session.AudioSetting.Format = format;
+                session.AudioSetting.SampleRate = sampleRate;
+                session.AudioSetting.Channels = channels;
+                session.AudioSetting.FrameDuration = frameDuration;
+            }
+
+            bool providerInitResult = await this._providerManager.InitializePrivateConfigAsync(session);
+            bool handlerInitResult = this._handlerManager.InitializePrivateConfig(session);
+
+            if (providerInitResult && handlerInitResult)
+            {
+                _tokenSessionRegistry.Register(session.DeviceToken, session.SessionId);
+                _eventPublisher.Publish(new DeviceOnlineEvent(session.DeviceToken, session.SessionId, DateTime.UtcNow));
+
                 if (session.protocolType == Session.ProtocolType.websocket)
                 {
                     await this.SendOutter.SendAsync(JsonHelper.Serialize(defaultHelloMessage), string.Empty);
@@ -99,23 +104,22 @@ internal class HelloMessageHandler : BaseHandler
                 {
                     await this.SendOutter.SendAsync(JsonHelper.Serialize(defaultHelloMessage), "hello");
                 }
+                session.LastGoodbyeTime = null;
+                session.timeoutClose = false;
 
-                // 注册设备令牌和会话ID到TokenSessionRegistry 必须等到会话对象创建后才能注册，因为注册需要使用会话ID
-                _tokenSessionRegistry.Register(session.DeviceToken, session.SessionId);
-                _eventPublisher.Publish(new DeviceOnlineEvent(session.DeviceToken, session.SessionId, DateTime.UtcNow));
                 // 检查并处理MCP功能支持
                 if (helloMessage.TryGetPropertyValue("features", out var features) && features is not null)
-            {
-                JsonObject featuresObj = features.AsObject();
-                if (featuresObj.TryGetPropertyValue("mcp", out var mcp) && mcp is not null)
                 {
-                    bool isSupportMCP = mcp.GetValue<bool>();
-                    if (isSupportMCP)
+                    JsonObject featuresObj = features.AsObject();
+                    if (featuresObj.TryGetPropertyValue("mcp", out var mcp) && mcp is not null)
                     {
-                        this._providerManager.BuildMCP(session);
+                        bool isSupportMCP = mcp.GetValue<bool>();
+                        if (isSupportMCP)
+                        {
+                            this._providerManager.BuildMCP(session);
+                        }
                     }
                 }
-            }
 
                 // 你想直接给AI对话，不走语音识别那套
                 //string yourText = "限制10个字内；简短的打个招呼。";
@@ -124,10 +128,10 @@ internal class HelloMessageHandler : BaseHandler
                 //await _dialogueHandler.Handle(yourText, session);
                 //await _dialogueHandler.call(yourText, session);
             }
-        else
-        {
-            this.Logger.LogError(Lang.HelloMessageHandler_Handle_InitFailed, session.DeviceId);
+            else
+            {
+                this.Logger.LogError(Lang.HelloMessageHandler_Handle_InitFailed, session.DeviceId);
+            }
         }
-    }
     }
 }

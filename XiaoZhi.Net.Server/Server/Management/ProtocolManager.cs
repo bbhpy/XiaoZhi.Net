@@ -6,6 +6,7 @@ using SuperSocket.WebSocket.Server;
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Security.Cryptography.X509Certificates;
 using XiaoZhi.Net.Server.Abstractions.Common.Enums;
 using XiaoZhi.Net.Server.Protocol.WebSocket;
 using XiaoZhi.Net.Server.Protocol.WebSocket.Contexts;
@@ -42,19 +43,44 @@ internal class ProtocolManager
                 {
                     options.Name = "Xiao Zhi .Net Server";
 
-                    ListenOptions listenOptions = new ListenOptions
+                    // 创建两个独立的监听器，分别处理IPv4和IPv6
+                    var listeners = new List<ListenOptions>();
+
+                    // IPv4监听器
+                    var ipv4Listener = new ListenOptions
                     {
-                        Ip = "IpV6Any",
+                        Ip = "any",  // 使用 "any" 而不是 "0.0.0.0"
                         Port = webSocketOption.Port,
                         Path = webSocketOption.Path
                     };
 
-                    // 配置WSS证书选项
+                    // IPv6监听器
+                    var ipv6Listener = new ListenOptions
+                    {
+                        Ip = "IpV6Any",  // 使用 "IpV6Any"
+                        Port = webSocketOption.Port,
+                        Path = webSocketOption.Path
+                    };
+
+                    listeners.Add(ipv4Listener);
+                    listeners.Add(ipv6Listener);
+
+                    // 配置WSS证书选项（如果使用HTTPS/WSS）
                     if (webSocketOption.WssOption is not null)
                     {
-                        listenOptions.AuthenticationOptions.ServerCertificate = new System.Security.Cryptography.X509Certificates.X509Certificate2(webSocketOption.WssOption.CertFilePath, webSocketOption.WssOption.CertPassword);
+                        var certificate = new X509Certificate2(
+                            webSocketOption.WssOption.CertFilePath,
+                            webSocketOption.WssOption.CertPassword);
+
+                        foreach (var listener in listeners)
+                        {
+                            listener.AuthenticationOptions = new ServerAuthenticationOptions
+                            {
+                                ServerCertificate = certificate
+                            };
+                        }
                     }
-                    options.Listeners = new List<ListenOptions> { listenOptions };
+                    options.Listeners = listeners;
                     options.IdleSessionTimeOut = 60;
                     options.ClearIdleSessionInterval = 30;
                 })

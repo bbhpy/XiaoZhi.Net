@@ -155,6 +155,10 @@ namespace XiaoZhi.Net.Server.Common.Contexts
         /// </summary>
         public string DeviceToken { get; set; }
         /// <summary>
+        ///  最后一次离开
+        /// </summary>
+        public DateTime? LastGoodbyeTime { get; set; }
+        /// <summary>
         /// 设置监听模式
         /// </summary>
         /// <param name="mode">监听模式，支持 "auto"、"manual"、"realtime"</param>
@@ -213,10 +217,8 @@ namespace XiaoZhi.Net.Server.Common.Contexts
         public void Reset()
         {
             this.RejectIncomingAudio();
-            this.IncrementTurnId();
+            //this.IncrementTurnId();
             //this.AcceptIncomingAudio();
-            // 默认关闭门禁，等待第一个音频包触发
-            this.RejectIncomingAudio(); // 改为关闭门禁
             this.AudioPacket.Reset();
         }
         /// <summary>
@@ -234,6 +236,7 @@ namespace XiaoZhi.Net.Server.Common.Contexts
             }
             try
             {
+                this.IncrementTurnId();
                 this._sessionCts.Cancel();
             }
             catch (ObjectDisposedException)
@@ -241,6 +244,7 @@ namespace XiaoZhi.Net.Server.Common.Contexts
                 lock (_lock)
                 {
                     this.Reset();
+                    this.IncrementTurnId();
                     this._isReseting = false;
                     this.CreateCancellationTokenSource();
                     this.SessionCtsTokenChanged?.Invoke(this._sessionCts.Token);

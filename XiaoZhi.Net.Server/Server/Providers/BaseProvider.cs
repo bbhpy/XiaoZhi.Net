@@ -3,8 +3,10 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using XiaoZhi.Net.Server.Common.Configs;
 using XiaoZhi.Net.Server.Common.Constants;
 using XiaoZhi.Net.Server.I18n;
+using XiaoZhi.Net.Server.Providers.LLM;
 
 namespace XiaoZhi.Net.Server.Providers
 {
@@ -182,3 +184,4 @@ internal abstract class BaseProvider<TLogger, TSettings> : IProvider<TSettings> 
     }
 }
 }
+

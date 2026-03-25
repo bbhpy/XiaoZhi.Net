@@ -1,7 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
-using ModelContextProtocol.Client;
-using ModelContextProtocol.Protocol;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -27,8 +25,18 @@ namespace XiaoZhi.Net.Server.Providers.MCP
     /// <typeparam name="TLogger">日志记录器类型</typeparam>
     internal abstract class BaseMcpClient<TLogger> : BaseProvider<TLogger, MCPClientBuildConfig>, ISubMcpClient
     {
+        // MCP 协议常量
+        private static class McpMethods
+        {
+            public const string Initialize = "initialize";
+            public const string ToolsList = "tools/list";
+            public const string ToolsCall = "tools/call";
+            public const string InitializedNotification = "notifications/initialized";
+        }
+
         private const char DOT_PLACEHOLDER = '4';  // U+00B7 间隔号
         private const char REAL_DOT = '.';
+
         /// <summary>
         /// 用于控制并发访问的信号量，限制同时只能有一个线程访问共享资源
         /// </summary>
@@ -61,6 +69,7 @@ namespace XiaoZhi.Net.Server.Providers.MCP
 
         private readonly ToolRouter _toolRegistry;
         private readonly McpServiceStore _serviceStore;
+
         /// <summary>
         /// 初始化BaseMcpClient实例
         /// </summary>
@@ -274,31 +283,37 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                 }
             }
         }
+
         /// <summary>
         /// 发送MCP初始化请求异步方法
         /// </summary>
         /// <returns>异步任务</returns>
         public virtual async Task SendMcpInitializeAsync()
         {
-            McpClientOptions mcpClientOptions = new McpClientOptions
+            var @params = new
             {
-                ProtocolVersion = "2024-11-05",
-                Capabilities = new ClientCapabilities
+                protocolVersion = "2024-11-05",
+                capabilities = new
                 {
-                    Roots = new RootsCapability { ListChanged = true },
-                    Sampling = new SamplingCapability { }
+                    roots = new
+                    {
+                        listChanged = true
+                    },
+                    sampling = new { }
                 },
-                ClientInfo = new Implementation
+                clientInfo = new
                 {
-                    Name = this.ModelName,
-                    Version = "1.0.0"
+                    name = this.ModelName,
+                    version = "1.0.0"
                 }
             };
-            JsonRpcRequest request = new JsonRpcRequest
+
+            var request = new
             {
-                Method = RequestMethods.Initialize,
-                Id = new RequestId(1),
-                Params = mcpClientOptions.ToNode()
+                jsonrpc = "2.0",
+                method = McpMethods.Initialize,
+                id = 1,
+                @params = @params
             };
 
             this.Logger.LogInformation(Lang.BaseMcpClient_SendMcpInitializeAsync_SendingInit, this.CurrentSession.DeviceId);
@@ -313,11 +328,10 @@ namespace XiaoZhi.Net.Server.Providers.MCP
         /// <returns>异步任务</returns>
         public virtual async Task SendMcpNotificationAsync(string method)
         {
-            var @params = new { };
-            JsonRpcNotification request = new JsonRpcNotification
+            var request = new
             {
-                Method = method,
-                Params = @params.ToNode()
+                jsonrpc = "2.0",
+                method = method
             };
 
             this.Logger.LogDebug(Lang.BaseMcpClient_SendMcpNotificationAsync_SendingNotification, this.CurrentSession.DeviceId, method);
@@ -331,10 +345,11 @@ namespace XiaoZhi.Net.Server.Providers.MCP
         /// <returns>异步任务</returns>
         public virtual async Task RequestToolsListAsync()
         {
-            JsonRpcRequest request = new JsonRpcRequest
+            var request = new
             {
-                Method = RequestMethods.ToolsList,
-                Id = new RequestId(2)
+                jsonrpc = "2.0",
+                method = McpMethods.ToolsList,
+                id = 2
             };
 
             this.Logger.LogDebug(Lang.BaseMcpClient_RequestToolsListAsync_RequestTools, this.CurrentSession.DeviceId);
@@ -350,11 +365,12 @@ namespace XiaoZhi.Net.Server.Providers.MCP
         public virtual async Task RequestToolsListAsync(string cursor)
         {
             var @params = new { cursor };
-            JsonRpcRequest request = new JsonRpcRequest
+            var request = new
             {
-                Method = RequestMethods.ToolsList,
-                Id = new RequestId(2),
-                Params = @params.ToNode()
+                jsonrpc = "2.0",
+                method = McpMethods.ToolsList,
+                id = 2,
+                @params = @params
             };
 
             this.Logger.LogDebug(Lang.BaseMcpClient_RequestToolsListAsync_RequestToolsWithCursor, this.CurrentSession.DeviceId, cursor);
@@ -436,11 +452,12 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                     ["arguments"] = argsObject
                 };
 
-                JsonRpcRequest request = new JsonRpcRequest
+                var request = new
                 {
-                    Id = new RequestId(toolCallId),
-                    Method = RequestMethods.ToolsCall,
-                    Params = @params
+                    jsonrpc = "2.0",
+                    id = toolCallId,
+                    method = McpMethods.ToolsCall,
+                    @params = @params
                 };
 
                 this.Logger.LogDebug("设备 {DeviceId} 调用 MCP 工具：{ToolName}，参数：{Arguments}",
@@ -494,6 +511,7 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                 throw;
             }
         }
+
         /// <summary>
         /// 更新该设备的三方工具（供 ThirdPartyToolRegistrar 调用）
         /// </summary>
@@ -588,6 +606,7 @@ namespace XiaoZhi.Net.Server.Providers.MCP
                 this.Logger.LogError(ex, "更新设备 {DeviceId} 的三方工具失败", this.CurrentSession.DeviceId);
             }
         }
+
         /// <summary>
         /// 抽象方法：发送MCP消息
         /// </summary>
@@ -677,9 +696,9 @@ namespace XiaoZhi.Net.Server.Providers.MCP
         {
             this.CurrentSession = config.Session;
             this.AdditionalMetadataDic = new Dictionary<string, object?>
-        {
-            { "session_id", this.CurrentSession.SessionId }
-        };
+            {
+                { "session_id", this.CurrentSession.SessionId }
+            };
         }
 
         /// <summary>
@@ -692,7 +711,5 @@ namespace XiaoZhi.Net.Server.Providers.MCP
             string processed = name.Replace(REAL_DOT, DOT_PLACEHOLDER);
             return Regex.Replace(processed, @"[^a-zA-Z0-9_\\-\u4e00-\u9fff]", "_");
         }
-
-
     }
 }

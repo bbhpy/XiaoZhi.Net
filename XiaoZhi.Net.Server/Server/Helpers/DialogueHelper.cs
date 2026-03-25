@@ -141,12 +141,16 @@ internal static class DialogueHelper
     /// 匹配句号、问号、感叹号、分号、冒号等标点符号，以及换行符
     /// </summary>
     public static Regex SENTENCE_SPLIT_REGEX = new Regex(@"(?<![0-9])[.?!;:](?=\s|$)|[\r\n]+|[。？！；：，]");
-
-    /// <summary>
-    /// 标点符号匹配模式
-    /// 用于匹配各种中英文标点符号
-    /// </summary>
-    public const string PUNCTUATIONS_PATTERN = @"(?<![0-9])[.?!;:](?![0-9])|[。？！；：]";
+        /// <summary>
+        /// 完整句子分割正则表达式（句号、问号、感叹号、分号、冒号、换行）
+        /// 不包含逗号，避免拆分过细
+        /// </summary>
+        public static Regex SENTENCE_SPLIT_REGEX_FULL = new Regex(@"(?<![0-9])[.?!;:](?=\s|$)|[\r\n]+|[。？！；：]");
+        /// <summary>
+        /// 标点符号匹配模式
+        /// 用于匹配各种中英文标点符号
+        /// </summary>
+        public const string PUNCTUATIONS_PATTERN = @"(?<![0-9])[.?!;:](?![0-9])|[。？！；：]";
 
     /// <summary>
     /// 需要去除的中英文标点符号集合（包括全角/半角）

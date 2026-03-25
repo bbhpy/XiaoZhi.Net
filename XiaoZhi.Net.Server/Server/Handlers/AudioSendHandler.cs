@@ -142,8 +142,24 @@ namespace XiaoZhi.Net.Server.Handlers
                 {
                     await this.SendOutter.SendTtsMessageAsync(TtsStatus.Stop);
                     this.Logger.LogDebug(Lang.AudioSendHandler_Handle_LastFrame, session.DeviceId);
-                    if (session.CloseAfterChat)
+
+                    session.IncrementTurnId();
+                    session.Reset();
+                    // 关键：重新打开音频接收
+                    session.AcceptIncomingAudio();
+                    if (session.timeoutClose)
                     {
+                        var abortMessage = new
+                        {
+                            type = "goodbye",
+                            session_id = session.SessionId
+                        };
+
+                        string goodbyeJson = System.Text.Json.JsonSerializer.Serialize(abortMessage);
+                        await this.SendOutter.SendAsync(goodbyeJson, "goodbye");
+
+                        this.Logger.LogInformation($"设备 {session.DeviceId} 发送 goodbye 消息，关闭会话");
+
                         await this.SendOutter.CloseSessionAsync("Close Chat");
                     }
                 }

@@ -162,14 +162,16 @@ namespace XiaoZhi.Net.Server.Handlers
                 return;
             }
 
+
             session.AudioPacket.Reset();
 
             if (session.timeoutClose)
             {
                 return;
             }
-
-            session.CloseAfterChat = true;
+            //session.LastGoodbyeTime = DateTime.Now;
+            session.IncrementTurnId();
+            session.timeoutClose = true;
             string prompt = "限制20个字内 聊天结束、你要休息了，用富有感情、依依不舍的话来结束这场对话吧。";
 
             var workflow = this._stringWorkflowPool.Get();

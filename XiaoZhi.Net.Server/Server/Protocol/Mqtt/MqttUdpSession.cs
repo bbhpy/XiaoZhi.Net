@@ -250,7 +250,6 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             };
             return this.SendAsync(JsonHelper.Serialize(msg),"stt");
         }
-
         public Task SendLlmMessageAsync(Emotion emotion)
         {
             if (this.XiaoZhiSession is null)
@@ -381,12 +380,12 @@ namespace XiaoZhi.Net.Server.Server.Protocol.Mqtt
             // 创建新的会话对象
             Session session = new Session(this.SessionId, MacAddress, string.Empty, userEndPoint,Session.ProtocolType.mqtt, this);
             session.DeviceToken = "AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa";
+            // 设置当前小知会话
+            this.XiaoZhiSession = session;
             // 初始化问候消息处理器
             this._handlerManager.InitializeHelloMessageHandler(session);
             // 刷新最后活动时间
             session.RefreshLastActivityTime();
-            // 设置当前小知会话
-            this.XiaoZhiSession = session;
 
             _logger.LogInformation("MQTT客户端连接成功，ClientId：{ClientId}，远程地址：{Endpoint}",
                 clientId, remoteEndPoint);

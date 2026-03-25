@@ -51,12 +51,13 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             _eventPublisher = eventPublisher;
             _toolInvoker = toolInvoker;
 
+            _logger.LogInformation("===== ThirdPartyToolRegistrar 构造函数被调用 =====");
             // 订阅事件
             _subscriptions.Add(_eventPublisher.Subscribe<ServiceBoundEvent>(OnServiceBound));
             _subscriptions.Add(_eventPublisher.Subscribe<DeviceOnlineEvent>(OnDeviceOnline));
             _subscriptions.Add(_eventPublisher.Subscribe<ServiceUnboundEvent>(OnServiceUnbound));
 
-            _logger.LogInformation("ThirdPartyToolRegistrar 已启动，订阅了服务绑定和设备上线事件");
+            _logger.LogInformation("ThirdPartyToolRegistrar 已启动，已订阅 {Count} 个事件", _subscriptions.Count);
         }
 
         /// <summary>
@@ -95,8 +96,20 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
         {
             try
             {
-                _logger.LogInformation("收到设备上线事件: 设备 {DeviceToken}, 会话 {SessionId}",
-                    @event.DeviceToken, @event.SessionId);
+                _logger.LogInformation("===== OnDeviceOnline 被触发 =====");
+                _logger.LogInformation("设备 Token: {DeviceToken}, 会话: {SessionId}, 时间: {OnlineAt}",
+                    @event.DeviceToken, @event.SessionId, @event.OnlineAt);
+
+                // 检查存储中的绑定
+                var bindings = _serviceStore.GetBindingsByDevice(@event.DeviceToken);
+                _logger.LogInformation("设备 {DeviceToken} 在存储中有 {Count} 个绑定",
+                    @event.DeviceToken, bindings.Count);
+
+                foreach (var binding in bindings)
+                {
+                    _logger.LogInformation("  - 服务: {ServiceId}, 工具数: {ToolCount}, 最后更新: {LastUpdated}",
+                        binding.ServiceId, binding.Tools?.Count ?? 0, binding.LastUpdatedAt);
+                }
 
                 // 设备上线，注册所有绑定的三方工具
                 await RegisterToolsForDeviceAsync(@event.DeviceToken);

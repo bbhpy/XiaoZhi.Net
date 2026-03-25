@@ -26,8 +26,10 @@ namespace XiaoZhi.Net.Server.Providers.VAD.Native
         private float _silenceThresholdSecond;
         private float _threshold;
         private float _thresholdLow;
-
-        private const int FRAME_WINDOW_THRESHOLD = 5;
+        /// <summary>
+        /// 帧窗口阈值  静音检测时间阈值的计算是基于帧窗口的数量来判断的，只有当连续的帧窗口中检测到的语音数量超过这个阈值时，才认为当前有语音存在。这个设计可以帮助减少误报和漏报，提高语音活动检测的准确性。
+        /// </summary>
+        private const int FRAME_WINDOW_THRESHOLD = 6;
         private const int SAMPLING_RATE_8K = 8000;
         private const int SAMPLING_RATE_16K = 16000;
 
@@ -204,7 +206,7 @@ this._closeConnectionNoVoiceTime = modelSetting.Config.GetConfigValueOrDefault("
 
                 if (silenceDuration >= longTermSilenceThresholdMs)
                 {
-                    this.Logger.LogDebug(Lang.SileroNative_CheckLongTermSilence_Detected, deviceId, silenceDuration);
+                    //this.Logger.LogDebug(Lang.SileroNative_CheckLongTermSilence_Detected, deviceId, silenceDuration);
                     this._vadEventCallback?.OnLongTermSilence();
 
                     vadState.HaveVoiceLatestTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();

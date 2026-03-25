@@ -15,7 +15,7 @@ namespace XiaoZhi.Net.Server.Providers.AudioMixer
         public event Action<float[], bool, bool, string?>? OnMixedAudioDataAvailable;
 
         public DefaultAudioProcessor(IAudioMixer audioMixer, IAudioSubtitleRegister audioSubtitleSyncTracker, ILogger<DefaultAudioProcessor> logger) : base(logger)
-        {
+        { 
             this._audioMixer = audioMixer;
             this._audioSubtitleSyncTracker = audioSubtitleSyncTracker;
             this._audioMixer.OnMixedAudioDataAvailable += this.FireOnMixedAudioData;

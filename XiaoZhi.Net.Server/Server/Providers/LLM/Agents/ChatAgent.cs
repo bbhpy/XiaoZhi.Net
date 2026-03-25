@@ -43,8 +43,18 @@ namespace XiaoZhi.Net.Server.Providers.LLM.Agents
                 this._chatAgentService = this.ServiceProvider.GetRequiredKeyedService<IChatCompletionService>($"LLM_{modelSetting.ChatLLMModelName}");
                 this.Prompt = modelSetting.Prompt;
 
-                // ✅ 统一使用 CreateExecutionSettings
-                this._chatExecutionSettings = CreateExecutionSettings(true);  // MaxTokens = 80
+                // 检查是否有任何插件
+                bool hasFunctions = false;
+                if (this._kernel != null)
+                {
+                    hasFunctions = this._kernel.Plugins.Any();
+                    this.Logger.LogDebug("检测到 {Count} 个插件: {Plugins}",
+                        this._kernel.Plugins.Count,
+                        string.Join(", ", this._kernel.Plugins.Select(p => p.Name)));
+                }
+
+                // 如果有插件，启用函数调用；否则禁用
+                this._chatExecutionSettings = CreateExecutionSettings(hasFunctions);
 
                 if (!string.IsNullOrEmpty(modelSetting.SummaryMemory))
                 {
@@ -210,26 +220,21 @@ namespace XiaoZhi.Net.Server.Providers.LLM.Agents
 
             this.ChatHistory.AddUserMessage(userMessage);
 
-            // ✅ 使用相同的配置，确保函数调用可用
-            var executionSettings = this._chatExecutionSettings ?? new OpenAIPromptExecutionSettings
+            var executionSettings = this._chatExecutionSettings;
+            if (executionSettings == null)
             {
-                Temperature = 0.5f,
-                MaxTokens = 40,
-                ResponseFormat = ChatResponseFormat.CreateTextFormat(),
-                FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(
-                    options: new FunctionChoiceBehaviorOptions
-                    {
-                        AllowStrictSchemaAdherence = false // 无限制
-                    })
-            };
+                executionSettings = CreateExecutionSettings(true);
+            }
 
-            StringBuilder allResponse = new StringBuilder();
-            StringBuilder segmentResponse = new StringBuilder();
+            StringBuilder fullResponse = new StringBuilder();
+            StringBuilder currentSentence = new StringBuilder();
             bool hasFunctionCall = false;
 
             await foreach (var item in this._chatAgentService.GetStreamingChatMessageContentsAsync(
                 this.ChatHistory, executionSettings, this._kernel, token))
             {
+                token.ThrowIfCancellationRequested();
+
                 // 检查函数调用
                 if (item.Items?.Any(i => i is FunctionCallContent) == true)
                 {
@@ -238,55 +243,70 @@ namespace XiaoZhi.Net.Server.Providers.LLM.Agents
                     foreach (var functionCall in functionCalls)
                     {
                         this.Logger.LogInformation(
-                            "流式响应中检测到函数调用: {PluginName}.{FunctionName}",
-                            functionCall.PluginName,
+                            "检测到函数调用: {PluginName}.{FunctionName}",
+                            functionCall.PluginName ?? "unknown",
                             functionCall.FunctionName);
                     }
+                    // 函数调用会被 AutoInvoke 自动处理，继续等待后续文本响应
+                    continue;
                 }
 
                 string content = item.Content ?? string.Empty;
+                if (string.IsNullOrEmpty(content))
+                {
+                    continue;
+                }
+
                 string text = MarkdownCleaner.CleanMarkdown(Regex.Unescape(content));
 
-                // 流式输出逻辑
-                segmentResponse.Append(text);
-                string currentSegment = segmentResponse.ToString();
-                Match match = DialogueHelper.SENTENCE_SPLIT_REGEX.Match(currentSegment);
+                fullResponse.Append(text);
+                currentSentence.Append(text);
+
+                string currentText = currentSentence.ToString();
+
+                // 使用完整句子匹配（不包含逗号）
+                Match match = DialogueHelper.SENTENCE_SPLIT_REGEX_FULL.Match(currentText);
 
                 while (match.Success)
                 {
                     int splitPosition = match.Index + match.Length;
-                    string sentence = currentSegment.Substring(0, splitPosition);
+                    string sentence = currentText.Substring(0, splitPosition).Trim();
 
-                    allResponse.Append(sentence);
-                    yield return sentence;
+                    if (!string.IsNullOrEmpty(sentence))
+                    {
+                        this.Logger.LogDebug("流式输出完整句子: {Sentence}", sentence);
+                        yield return sentence;
+                    }
 
-                    string remaining = currentSegment.Substring(splitPosition);
-                    segmentResponse.Clear();
-                    segmentResponse.Append(remaining);
-                    currentSegment = remaining;
-                    match = DialogueHelper.SENTENCE_SPLIT_REGEX.Match(currentSegment);
+                    string remaining = currentText.Substring(splitPosition);
+                    currentSentence.Clear();
+                    currentSentence.Append(remaining);
+                    currentText = remaining;
+                    match = DialogueHelper.SENTENCE_SPLIT_REGEX_FULL.Match(currentText);
                 }
             }
 
-            // 处理剩余内容
-            if (segmentResponse.Length > 0)
+            // 处理最后剩余的内容（没有标点结尾）
+            if (currentSentence.Length > 0)
             {
-                string sentence = segmentResponse.ToString();
-                allResponse.Append(sentence);
-                yield return sentence;
+                string remaining = currentSentence.ToString().Trim();
+                if (!string.IsNullOrEmpty(remaining))
+                {
+                    this.Logger.LogDebug("流式输出剩余内容: {Remaining}", remaining);
+                    yield return remaining;
+                }
             }
 
-            string allContent = allResponse.ToString();
+            string allContent = fullResponse.ToString().Trim();
 
-            // ✅ 如果是纯函数调用（没有文本响应），可能需要特殊处理
             if (hasFunctionCall && string.IsNullOrEmpty(allContent))
             {
-                this.Logger.LogDebug("函数调用后无文本响应，可能需要再次调用LLM获取响应");
-                // 这里可以根据需要决定是否再次调用LLM获取文本响应
+                this.Logger.LogDebug("函数调用后无文本响应，已自动处理");
             }
-            else
+            else if (!string.IsNullOrEmpty(allContent))
             {
                 this.ChatHistory.AddAssistantMessage(allContent);
+                this.Logger.LogDebug("已添加助手响应到对话历史，长度: {Length}", allContent.Length);
             }
         }
         private bool BuildPlugins(Kernel kernel)
@@ -335,17 +355,21 @@ namespace XiaoZhi.Net.Server.Providers.LLM.Agents
 
             if (enableFunctionCalling)
             {
+                // 关键：显式设置 autoInvoke = true
                 baseSettings.FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(
+                    autoInvoke: true,  // 这个参数让函数自动执行
                     options: new FunctionChoiceBehaviorOptions
                     {
                         AllowParallelCalls = true,
-                        AllowConcurrentInvocation = true,
-                        AllowStrictSchemaAdherence = false
+                        AllowConcurrentInvocation = true
                     });
+
+                this.Logger.LogDebug("函数调用已启用，AutoInvoke = true");
             }
             else
             {
-                baseSettings.FunctionChoiceBehavior = FunctionChoiceBehavior.None();
+                baseSettings.FunctionChoiceBehavior = null;
+                this.Logger.LogDebug("函数调用已禁用");
             }
 
             return baseSettings;

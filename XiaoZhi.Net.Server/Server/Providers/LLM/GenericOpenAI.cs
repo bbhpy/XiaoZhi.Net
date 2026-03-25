@@ -236,47 +236,50 @@ namespace XiaoZhi.Net.Server.Providers.LLM
 
                 string paragraphId = this.GenerateId();
 
+                // 先收集所有句子
+                List<string> sentences = new List<string>();
                 await foreach (string sentence in this._chatAgent.GenerateChatResponseStreamingAsync(userMessage, token))
                 {
                     token.ThrowIfCancellationRequested();
+                    if (!string.IsNullOrWhiteSpace(sentence))
+                    {
+                        sentences.Add(sentence);
+                    }
+                }
 
+                // 处理所有句子
+                for (int i = 0; i < sentences.Count; i++)
+                {
+                    string sentence = sentences[i];
                     Emotion detectedEmotion = await this._emotionAgent.AnalyzeEmotionAsync(userMessage, sentence, token);
-                    this.Logger.LogDebug(Lang.GenericOpenAI_ChatAsync_EmotionDetected, detectedEmotion, sentence);
 
                     var outSegment = this._outSegmentPool.Get();
                     outSegment.Initialize(sentence, detectedEmotion, paragraphId, this.GenerateSentenceId(paragraphId));
 
-                    if (allResponse.Count == 0)
-                    {
-                        outSegment.IsFirstSegment = true;
-                    }
-                    allResponse.Add(outSegment);
-                    if (allResponse.Count >= 2)
-                    {
-                        this.OnTokenGenerating?.Invoke(allResponse[^2]);
-                    }
+                    // 正确设置标志
+                    outSegment.IsFirstSegment = (i == 0);
+                    outSegment.IsLastSegment = (i == sentences.Count - 1);
 
-                }
-                if (allResponse.Any())
-                {
-                    OutSegment lastOutSegment = allResponse.Last();
-                    lastOutSegment.IsLastSegment = true;
-                    this.OnTokenGenerating?.Invoke(lastOutSegment);
+                    allResponse.Add(outSegment);
+
+                    // 现在发送时 IsLastSegment 已经正确设置
+                    this.OnTokenGenerating?.Invoke(outSegment);
+                    this.Logger.LogDebug("输出片段 {Index}/{Total}: {Content}, IsLast={IsLast}",
+                        i + 1, sentences.Count, outSegment.Content, outSegment.IsLastSegment);
                 }
 
                 this.OnTokenGenerated?.Invoke(allResponse);
+                this.Logger.LogDebug("流式对话完成，共生成 {Count} 个片段", allResponse.Count);
             }
             catch (OperationCanceledException)
             {
-                this.Logger.LogDebug(Lang.GenericOpenAI_ChatByStreamingAsync_Cancelled, allResponse.Count);
-                // Clean up any segments that were created
+                this.Logger.LogDebug("流式对话被取消，已生成 {Count} 个片段", allResponse.Count);
                 this.OnTokenGenerated?.Invoke(allResponse);
                 throw;
             }
             catch (Exception ex)
             {
-                this.Logger.LogError(ex, Lang.GenericOpenAI_ChatAsync_UnexpectedError, this.ProviderType);
-                // Clean up segments on error
+                this.Logger.LogError(ex, "流式对话异常");
                 this.OnTokenGenerated?.Invoke(allResponse);
             }
         }

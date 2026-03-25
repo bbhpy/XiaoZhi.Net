@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.SemanticKernel.Extensions;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -13,106 +14,99 @@ using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 
 namespace XiaoZhi.Net.Server.Providers.MCP.ServerMcp
 {
-/// <summary>
-/// 服务器MCP客户端类，继承自BaseMcpClient并实现ISubMcpClient接口
-/// </summary>
-internal class ServerMcpClient : BaseMcpClient<ServerMcpClient>, ISubMcpClient
-{
-    private ModelContextProtocol.Client.IMcpClient? _mcpClient;
-
     /// <summary>
-    /// 初始化ServerMcpClient实例
+    /// 服务器MCP客户端类，继承自BaseMcpClient并实现ISubMcpClient接口
     /// </summary>
-    /// <param name="logger">用于日志记录的ILogger实例</param>
-    public ServerMcpClient(ILogger<ServerMcpClient> logger, ToolRouter toolRegistry, McpServiceStore mcpServiceStore) : base(logger, toolRegistry, mcpServiceStore)
-        {
-    }
-
-    /// <summary>
-    /// 获取模型名称
-    /// </summary>
-    public override string ModelName => SubMCPClientTypeNames.ServerMcpClient;
-    
-    /// <summary>
-    /// 获取提供者类型
-    /// </summary>
-    public override string ProviderType => "SubMcpClient";
-
-    /// <summary>
-    /// 构建MCP客户端
-    /// </summary>
-    /// <param name="config">MCP客户端构建配置</param>
-    /// <returns>构建是否成功</returns>
-    public override bool Build(MCPClientBuildConfig config)
+    internal class ServerMcpClient : BaseMcpClient<ServerMcpClient>, ISubMcpClient
     {
-        try
-        {
-            this.InitSession(config);
-            ModelSetting modelSetting = config.ModelSetting;
+        private bool _isInitialized = false;
 
-            if (this.ModelName.ToLower() == "stdio-client")
+        /// <summary>
+        /// 初始化ServerMcpClient实例
+        /// </summary>
+        /// <param name="logger">用于日志记录的ILogger实例</param>
+        public ServerMcpClient(ILogger<ServerMcpClient> logger, ToolRouter toolRegistry, McpServiceStore mcpServiceStore) : base(logger, toolRegistry, mcpServiceStore)
+        {
+        }
+
+        /// <summary>
+        /// 获取模型名称
+        /// </summary>
+        public override string ModelName => SubMCPClientTypeNames.ServerMcpClient;
+
+        /// <summary>
+        /// 获取提供者类型
+        /// </summary>
+        public override string ProviderType => "SubMcpClient";
+
+        /// <summary>
+        /// 构建MCP客户端
+        /// </summary>
+        /// <param name="config">MCP客户端构建配置</param>
+        /// <returns>构建是否成功</returns>
+        public override bool Build(MCPClientBuildConfig config)
+        {
+            try
             {
-                string? name = modelSetting.Config.GetConfigValueOrDefault("Name");
-                string command = modelSetting.Config.GetConfigValueOrDefault("Command", string.Empty);
-                List<string> arguments = modelSetting.Config.GetConfigValueOrDefault("Arguments", new List<string>());
-                
-                // 创建 ServiceCollection 并添加日志记录器
-                var serviceCollection = new ServiceCollection();
-                serviceCollection.AddLogging(loggingBuilder =>
-                {
-                    loggingBuilder.AddConsole();
-                });
+                this.InitSession(config);
+                ModelSetting modelSetting = config.ModelSetting;
 
-                // 构建 IServiceProvider
-                var serviceProvider = serviceCollection.BuildServiceProvider();
-                var logger = serviceProvider.GetRequiredService<ILogger<McpClient>>();
-                var transport = new StdioClientTransport(new()
+                if (this.ModelName.ToLower() == "stdio-client")
                 {
-                    Name = name,
-                    Command = command,
-                    Arguments = arguments
-                });
+                    string? name = modelSetting.Config.GetConfigValueOrDefault("Name");
+                    string command = modelSetting.Config.GetConfigValueOrDefault("Command", string.Empty);
+                    List<string> arguments = modelSetting.Config.GetConfigValueOrDefault("Arguments", new List<string>());
 
-                this._mcpClient = McpClientFactory.CreateAsync(transport).GetAwaiter().GetResult();
-                IList<McpClientTool> tools = this._mcpClient.ListToolsAsync().GetAwaiter().GetResult();
-                foreach (McpClientTool tool in tools)
-                {
-                    this.Logger.LogInformation($"Got mcp tools: {tool.Name}, Description: {tool.Description}");
-#pragma warning disable SKEXP0001
-                    this.AddTool(tool.Name, tool.AsKernelFunction());
-#pragma warning restore SKEXP0001
+                    // 获取当前会话的 Kernel
+                    var kernel = this.CurrentSession.PrivateProvider?.Kernel;
+
+                    if (kernel == null)
+                    {
+                        this.Logger.LogError("Kernel is null, cannot register MCP tools");
+                        return false;
+                    }
+
+                    // 使用新包一行代码注册所有 MCP 工具
+                    kernel.Plugins.AddMcpFunctionsFromStdioServerAsync(
+                        serverName: name ?? "MCP Server",
+                        command: command,
+                        arguments: arguments.ToArray()
+                    ).GetAwaiter().GetResult();
+
+                    this.Logger.LogInformation($"MCP Server '{name}' registered successfully to kernel");
+                    _isInitialized = true;
                 }
+
+                return true;
             }
-
-
-            return true;
+            catch (Exception ex)
+            {
+                this.Logger.LogError(ex, "Failed to build ServerMcpClient");
+                return false;
+            }
         }
-        catch (Exception)
+
+        /// <summary>
+        /// 释放资源
+        /// </summary>
+        public override void Dispose()
         {
-
-            throw;
+            // 新包不需要手动释放资源
+            _isInitialized = false;
+            GC.SuppressFinalize(this);
         }
-    }
 
-    /// <summary>
-    /// 释放资源
-    /// </summary>
-    public override void Dispose()
-    {
-        this._mcpClient?.DisposeAsync();
-    }
+        /// <summary>
+        /// 异步发送MCP消息
+        /// 注意：新包封装了通信，此方法不再需要实际发送消息
+        /// 保留方法以符合接口要求
+        /// </summary>
+        protected override Task SendMCPMessageAsync<TMessage>(TMessage message)
+        {
+            // 新包内部处理了所有通信，此方法不再需要实现
+            // 如果未来需要发送自定义消息，可在此实现
+            return Task.CompletedTask;
+        }
 
-    /// <summary>
-    /// 异步发送MCP消息
-    /// </summary>
-    /// <typeparam name="TMessage">消息类型</typeparam>
-    /// <param name="message">要发送的消息</param>
-    /// <returns>异步任务</returns>
-    protected override Task SendMCPMessageAsync<TMessage>(TMessage message)
-    {
-        // todo
-        return Task.CompletedTask;
     }
-
-}
 }

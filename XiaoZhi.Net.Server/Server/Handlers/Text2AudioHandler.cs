@@ -125,6 +125,7 @@ namespace XiaoZhi.Net.Server.Handlers
                 if (string.IsNullOrEmpty(workflow.Data.Content))
                 {
                     this.Logger.LogInformation(Lang.Text2AudioHandler_Handle_NoTtsRequired);
+                    session.IncrementTurnId();
                     return;
                 }
                 this.HandlerToken.ThrowIfCancellationRequested();
