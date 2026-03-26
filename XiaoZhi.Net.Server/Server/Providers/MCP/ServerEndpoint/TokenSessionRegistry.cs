@@ -6,9 +6,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using XiaoZhi.Net.Server.Abstractions.Store;
 using XiaoZhi.Net.Server.Common.Contexts;
-using XiaoZhi.Net.Server.Protocol.WebSocket.Contexts;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt;
+using XiaoZhi.Net.Server.Server.Protocol.WebSocket;
 using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
 
 namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
@@ -24,17 +25,17 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
 
         private readonly IEventPublisher? _eventPublisher;
         // ⭐ 注入 Session 容器
-        private readonly ISessionContainer _sessionContainer;
+        private readonly SocketSessionStore _sessionContainer;
         private readonly MqttUdpSessionStore _mqttSessionStore;
 
         public TokenSessionRegistry(
      ILogger<TokenSessionRegistry> logger,
-     ISessionContainer sessionContainer,
+     SocketSessionStore store,
      MqttUdpSessionStore mqttSessionStore,
      IEventPublisher? eventPublisher = null)  // 可选参数，保持向后兼容
         {
             _logger = logger;
-            _sessionContainer = sessionContainer;
+            _sessionContainer = store;
             _mqttSessionStore = mqttSessionStore;
             _eventPublisher = eventPublisher;
         }
@@ -59,7 +60,7 @@ namespace XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint
             }
 
             // 优先从 WebSocket Session 容器中查找\
-            var wsSession = _sessionContainer.GetSessionByID(info.SessionId) as SocketSession;
+            var wsSession = _sessionContainer.GetSession(info.SessionId);
             if (wsSession!=null)
             {
                 _logger.LogDebug("Token {Token} 从 WebSocket 容器找到 Session {SessionId}", token, info.SessionId);

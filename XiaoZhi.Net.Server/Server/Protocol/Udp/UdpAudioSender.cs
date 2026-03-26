@@ -7,7 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
+namespace XiaoZhi.Net.Server.Server.Protocol.Udp
 {
     /// <summary>
     /// UDP音频包构建器（适配终端解密：Nonce=包头前16字节 + AES-CTR 1:1匹配mbedtls）

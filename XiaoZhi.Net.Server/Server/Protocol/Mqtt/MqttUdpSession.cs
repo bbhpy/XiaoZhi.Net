@@ -28,7 +28,7 @@ using XiaoZhi.Net.Server.I18n;
 using XiaoZhi.Net.Server.Management;
 using XiaoZhi.Net.Server.Protocol;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts;
-using XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts;
+using XiaoZhi.Net.Server.Server.Protocol.Udp;
 using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
 using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;
 

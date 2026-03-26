@@ -5,7 +5,7 @@ using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
+namespace XiaoZhi.Net.Server.Server.Protocol.Udp
 {
     /// <summary>
     /// UDP 工作项，用于在接收线程和 Worker 池之间传递数据

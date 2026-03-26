@@ -22,7 +22,7 @@ using XiaoZhi.Net.Server.Providers.MCP.DeviceMcp;
 using XiaoZhi.Net.Server.Providers.MCP.McpEndpoint;
 using XiaoZhi.Net.Server.Providers.MCP.ServerMcp;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts;
-using XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts;
+using XiaoZhi.Net.Server.Server.Protocol.Udp;
 using XiaoZhi.Net.Server.Server.Providers.MCP;
 using XiaoZhi.Net.Server.Server.Providers.MCP.Events;
 using XiaoZhi.Net.Server.Server.Providers.MCP.ServerEndpoint;

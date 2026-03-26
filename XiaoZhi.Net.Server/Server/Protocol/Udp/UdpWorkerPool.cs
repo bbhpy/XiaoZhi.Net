@@ -10,7 +10,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using XiaoZhi.Net.Server.Server.Protocol.Mqtt;
 
-namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
+namespace XiaoZhi.Net.Server.Server.Protocol.Udp
 {
     /// <summary>
     /// UDP Worker 池服务

@@ -11,12 +11,8 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using XiaoZhi.Net.Server.Abstractions;
-using XiaoZhi.Net.Server.Common.Contexts;
-using XiaoZhi.Net.Server.Server.Protocol.Mqtt;
-using XiaoZhi.Net.Server.Server.Protocol.Mqtt.Contexts;
 
-namespace XiaoZhi.Net.Server.Server.Protocol.Udp.Contexts
+namespace XiaoZhi.Net.Server.Server.Protocol.Udp
 {
     /// <summary>
     /// UDP 后台监听服务
