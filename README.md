@@ -10,6 +10,7 @@ mqtt+udp和修改的websocket都支持了IPv4和v6双栈,所以附带了修改xi
 
 对接此服务端xiaozhi-esp32的源码需要修改mqtt_protocol.cc文件两个类
 修改SendAudio函数为统一上传和接收的音频格式
+
 bool MqttProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
     std::lock_guard<std::mutex> lock(channel_mutex_);
        if (udp_ == nullptr) {
