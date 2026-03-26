@@ -7,3 +7,104 @@
 mqtt+udp和修改的websocket都支持了IPv4和v6双栈,所以附带了修改xiaozhi-esp32的代码，修改xiaozhi-esp32的udp音频上传格式和增加了ipv6。
 
 三方mcp连接：http://ip可以使用v6和v4+port/mcp/?token=AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa
+
+对接此服务端xiaozhi-esp32的源码需要修改mqtt_protocol.cc文件两个类
+修改SendAudio函数为统一上传和接收的音频格式
+bool MqttProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
+    std::lock_guard<std::mutex> lock(channel_mutex_);
+       if (udp_ == nullptr) {
+        return false;
+    }
+
+    // 协议要求的17字节包头结构体
+    struct AudioUdpHeader {
+        uint8_t type;          // 1字节，固定0x01
+        uint8_t flags;         // 1字节，未使用设为0
+        uint16_t payload_len;  // 2字节，网络字节序
+        uint32_t ssrc;         // 4字节，使用服务端分配的SSRC
+        uint32_t timestamp;    // 4字节，网络字节序
+        uint32_t sequence;     // 4字节，网络字节序
+    } __attribute__((packed));
+
+    AudioUdpHeader header = {0};
+    header.type = 0x01;                
+    header.flags = 0x00;               
+    header.payload_len = htons(packet->payload.size()); 
+    // 核心修改：替换为服务端分配的SSRC（而非手动生成）
+    header.ssrc = htonl(server_udp_ssrc_); // 注意：转网络字节序！
+    audio_ts += 60; // 每帧+60ms
+    header.timestamp = htonl(audio_ts);
+    //header.timestamp = htonl(packet->timestamp);       
+    header.sequence = htonl(++local_sequence_);        
+
+    // 后续组装/加密逻辑不变
+    std::string encrypted_packet;
+    encrypted_packet.resize(sizeof(AudioUdpHeader) + packet->payload.size());
+    memcpy(encrypted_packet.data(), &header, sizeof(AudioUdpHeader));
+
+    std::string nonce(aes_nonce_);
+    *(uint16_t*)&nonce[2] = header.payload_len;
+    *(uint32_t*)&nonce[8] = header.timestamp;
+    *(uint32_t*)&nonce[12] = header.sequence;
+
+    size_t nc_off = 0;
+    uint8_t stream_block[16] = {0};
+    if (mbedtls_aes_crypt_ctr(&aes_ctx_, packet->payload.size(), &nc_off, (uint8_t*)nonce.c_str(), stream_block,
+        (uint8_t*)packet->payload.data(), (uint8_t*)&encrypted_packet[sizeof(AudioUdpHeader)]) != 0) {
+        ESP_LOGE(TAG, "Failed to encrypt audio data");
+        return false;
+    }
+
+    return udp_->Send(encrypted_packet) > 0;
+}
+修改ParseServerHello函数是增加一个ssrc用于udp音频数据
+void MqttProtocol::ParseServerHello(const cJSON* root) {
+    auto transport = cJSON_GetObjectItem(root, "transport");
+    if (transport == nullptr || strcmp(transport->valuestring, "udp") != 0) {
+        ESP_LOGE(TAG, "Unsupported transport: %s", transport->valuestring);
+        return;
+    }
+
+    auto session_id = cJSON_GetObjectItem(root, "session_id");
+    if (cJSON_IsString(session_id)) {
+        session_id_ = session_id->valuestring;
+        ESP_LOGI(TAG, "Session ID: %s", session_id_.c_str());
+    }
+
+    // Get sample rate from hello message
+    auto audio_params = cJSON_GetObjectItem(root, "audio_params");
+    if (cJSON_IsObject(audio_params)) {
+        auto sample_rate = cJSON_GetObjectItem(audio_params, "sample_rate");
+        if (cJSON_IsNumber(sample_rate)) {
+            server_sample_rate_ = sample_rate->valueint;
+        }
+        auto frame_duration = cJSON_GetObjectItem(audio_params, "frame_duration");
+        if (cJSON_IsNumber(frame_duration)) {
+            server_frame_duration_ = frame_duration->valueint;
+        }
+    }
+
+    auto udp = cJSON_GetObjectItem(root, "udp");
+    if (!cJSON_IsObject(udp)) {
+        ESP_LOGE(TAG, "UDP is not specified");
+        return;
+    }
+    udp_server_ = cJSON_GetObjectItem(udp, "server")->valuestring;
+    udp_port_ = cJSON_GetObjectItem(udp, "port")->valueint;
+    auto key = cJSON_GetObjectItem(udp, "key")->valuestring;
+    auto nonce = cJSON_GetObjectItem(udp, "nonce")->valuestring;
+    //加了这部分
+    auto assigned_ssrc = cJSON_GetObjectItem(udp, "assigned_ssrc");
+    if (!cJSON_IsNumber(assigned_ssrc)) {
+        ESP_LOGE(TAG, "assigned_ssrc is missing or invalid (not a number)");
+        return;
+    }
+    server_udp_ssrc_ = assigned_ssrc->valueint;
+    //到此
+    aes_nonce_ = DecodeHexString(nonce);
+    mbedtls_aes_init(&aes_ctx_);
+    mbedtls_aes_setkey_enc(&aes_ctx_, (const unsigned char*)DecodeHexString(key).c_str(), 128);
+    local_sequence_ = 0;
+    remote_sequence_ = 0;
+    xEventGroupSetBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
+}
