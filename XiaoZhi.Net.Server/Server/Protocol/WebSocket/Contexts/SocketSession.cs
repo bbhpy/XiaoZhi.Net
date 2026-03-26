@@ -219,7 +219,7 @@ namespace XiaoZhi.Net.Server.Protocol.WebSocket.Contexts
 
             // 创建新的会话对象
             Session session = new Session(this.SessionId, deviceId, token, userEndPoint, Session.ProtocolType.websocket, this);
-            session.DeviceToken = "AAAPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xp";
+            session.DeviceToken = "AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa";
             // 初始化问候消息处理器
             this._handlerManager.InitializeHelloMessageHandler(session);
 
