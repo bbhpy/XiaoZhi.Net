@@ -8,6 +8,32 @@ mqtt+udp和修改的websocket都支持了IPv4和v6双栈,所以附带了修改xi
 
 三方mcp连接：http://ip可以使用v6和v4+port/mcp/?token=AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa
 
+XiaoZhi.Net.Sample.Server项目里的configs文件夹里的configs.json文件添加配置
+```
+ "MqttConfig": {
+   "Port": 1883,
+   "UseTls": false,
+   "GlobalUsername": "yangai_mqtt",
+   "GlobalPassword": "yangai@123456",
+   "ConnectionBacklog": 1000,
+   "EnablePersistentSessions": true,
+   "KeepAliveMonitorInterval": 30,
+   "MaxPendingMessagesPerClient": 1000
+ },
+ "UdpConfig": {
+   "Server": "192.168.1.37", // UDP服务绑定地址（0.0.0.0监听所有网卡）
+   "Port": 8888, // UDP监听端口（可自定义，避免与MQTT端口冲突）
+   "Key": "0123456789ABCDEF0123456789ABCDEF", // 128位AES密钥（32位纯十六进制，无分隔符）
+   "NonceSalt": "UDP_AUDIO_NONCE_SALT_2026", // 生成nonce的盐值（自定义，建议保留）
+   "WorkerCount": 2, // 可选, 表示使用 CPU 核心数
+   "QueueSize": 1000 // 可选，每个 Worker 的队列容量
+ },
+ "McpServerEndpointconfig": {
+   "Port": 8080,//三方mcp服务连接端口
+   "Path": "mcp"//
+ },
+```
+
 对接此服务端xiaozhi-esp32的源码需要修改mqtt_protocol.cc文件两个类
 修改SendAudio函数为统一上传和接收的音频格式
 ```
