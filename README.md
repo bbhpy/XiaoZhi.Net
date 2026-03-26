@@ -4,6 +4,8 @@
 
 整个项目按XiaoZhi.net项目说明部署好，再将我的代码覆盖原项目代码部分即可，我上传的就是修改的部分代码。
 
+WebAPI文件夹为xiaozhi端ota的webapi（没有数据库都是临时的），appsettings.json配置ota请求时下发的消息，"mqttxs": true为下发mqtt服务器配置、false为不下发，小智端收到mqtt配置会优先连接mqtt，没有下发就会连接websocket。
+
 mqtt+udp和修改的websocket都支持了IPv4和v6双栈,所以附带了修改xiaozhi-esp32的代码，修改xiaozhi-esp32的udp音频上传格式和增加了ipv6。
 
 三方mcp连接：http://ip可以使用v6和v4+port/mcp/?token=AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa
