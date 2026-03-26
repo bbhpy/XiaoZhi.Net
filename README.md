@@ -4,6 +4,8 @@
 
 整个项目按XiaoZhi.net项目说明部署好，再将我的代码覆盖原项目代码部分即可，我上传的就是修改的部分代码。
 
+WebAPI文件夹为xiaozhi端ota的webapi（没有数据库都是临时的），appsettings.json配置ota请求时下发的消息，"mqttxs": true为下发mqtt服务器配置、false为不下发，小智端收到mqtt配置会优先连接mqtt，没有下发就会连接websocket。
+
 mqtt+udp和修改的websocket都支持了IPv4和v6双栈,所以附带了修改xiaozhi-esp32的代码，修改xiaozhi-esp32的udp音频上传格式和增加了ipv6。
 
 三方mcp连接：http://ip可以使用v6和v4+port/mcp/?token=AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa
@@ -21,11 +23,11 @@ XiaoZhi.Net.Sample.Server项目里的configs文件夹里的configs.json文件添
    "MaxPendingMessagesPerClient": 1000
  },
  "UdpConfig": {
-   "Server": "192.168.1.37", // UDP服务绑定地址（0.0.0.0监听所有网卡）
+   "Server": "192.168.0.34", // UDP服务绑定地址（0.0.0.0监听所有网卡） 此配置已作废 udp监听本机的v4和v6
    "Port": 8888, // UDP监听端口（可自定义，避免与MQTT端口冲突）
-   "Key": "0123456789ABCDEF0123456789ABCDEF", // 128位AES密钥（32位纯十六进制，无分隔符）
-   "NonceSalt": "UDP_AUDIO_NONCE_SALT_2026", // 生成nonce的盐值（自定义，建议保留）
-   "WorkerCount": 2, // 可选, 表示使用 CPU 核心数
+   "Key": "0123456789ABCDEF0123456789ABCDEF", // 128位AES密钥（32位纯十六进制，无分隔符） 已作废 mqtt登录时会自动生成
+   "NonceSalt": "UDP_AUDIO_NONCE_SALT_2026", // 生成nonce的盐值（自定义，建议保留） 已作废 mqtt登录时会自动生成
+   "WorkerCount": 2, // 可选, 表示使用 CPU 核心数  
    "QueueSize": 1000 // 可选，每个 Worker 的队列容量
  },
  "McpServerEndpointconfig": {
