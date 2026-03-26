@@ -6,4 +6,4 @@
 
 mqtt+udp和修改的websocket都支持了IPv4和v6双栈,所以附带了修改xiaozhi-esp32的代码，修改xiaozhi-esp32的udp音频上传格式和增加了ipv6。
 
-三方mcp连接：http://ip+port/mcp/?token=AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa
+三方mcp连接：http://ip可以使用v6和v4+port/mcp/?token=AAAFPzL146bfSelCIxiGaYP73orWydK4ZOuDCajDn4bMPNXeIzYhp8y3ScGAQt0Xa
